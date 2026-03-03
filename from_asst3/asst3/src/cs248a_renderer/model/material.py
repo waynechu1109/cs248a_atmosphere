@@ -26,6 +26,7 @@ class BRDFType(Enum):
     GLASS = 2
     RETROREFLECTIVE = 3
     RETROREFLECTIVE_LAMBERTIAN = 4
+    ATMOSPHERE = 5
 
 @dataclass
 class MaterialField[T]:
@@ -156,6 +157,17 @@ class PhysicsBasedMaterial:
     smoothness: float = 0.0
     ior: float = 1.5  # Index of Refraction (default: glass ~1.5)
     brdf_type: BRDFType = BRDFType.RETROREFLECTIVE_LAMBERTIAN
+    atmosphere_scattering_color: glm.vec3 = field(
+        default_factory=lambda: glm.vec3(0.45, 0.67, 1.0)
+    )
+    atmosphere_absorption_color: glm.vec3 = field(
+        default_factory=lambda: glm.vec3(1.0, 0.55, 0.2)
+    )
+    atmosphere_density_falloff: float = 4.0
+    atmosphere_scattering_strength: float = 1.0
+    atmosphere_phase_g: float = 0.35
+    atmosphere_planet_radius: float = 1.0
+    atmosphere_radius: float = 1.15
 
     def get_this(self, offset: int) -> Tuple[Dict, int]:
         albedo_data, offset = self.albedo.get_this(offset)
@@ -164,6 +176,13 @@ class PhysicsBasedMaterial:
             "smoothness": self.smoothness,
             "brdfType": self.brdf_type.value,
             "ior": self.ior,
+            "atmosphereScatteringColor": self.atmosphere_scattering_color,
+            "atmosphereAbsorptionColor": self.atmosphere_absorption_color,
+            "atmosphereDensityFalloff": self.atmosphere_density_falloff,
+            "atmosphereScatteringStrength": self.atmosphere_scattering_strength,
+            "atmospherePhaseG": self.atmosphere_phase_g,
+            "atmospherePlanetRadius": self.atmosphere_planet_radius,
+            "atmosphereRadius": self.atmosphere_radius,
         }, offset
 
 

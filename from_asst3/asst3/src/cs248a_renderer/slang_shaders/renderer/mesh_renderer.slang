@@ -108,7 +108,7 @@ public Optional<RayMeshSampleResult> meshSample(float2 uv, RendererUniform unifo
                 // NOTE: For Lambertian surfaces, we've just accounted for direct
                 // illumination at depth=0. Therefore, we ensure that the next
                 // bounce is not on a light source.
-                if (parameters.brdfType == 0)
+                if (parameters.brdfType == 0 || parameters.brdfType == 5)
                 {
                     renderLight = false;
                 }

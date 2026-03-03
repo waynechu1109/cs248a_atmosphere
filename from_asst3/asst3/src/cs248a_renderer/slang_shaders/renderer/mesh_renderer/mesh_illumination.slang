@@ -221,6 +221,21 @@ public float3 getDirectIllumination(PhysicsBasedParameters parameters, RendererU
         fr = float3(0.0);
         lambertianScattering = true;
     }
+    else if (parameters.brdfType == 5)
+    {
+        AtmosphereBRDF brdf = AtmosphereBRDF(
+            parameters.albedo,
+            parameters.atmosphereScatteringColor,
+            parameters.atmosphereAbsorptionColor,
+            parameters.atmosphereDensityFalloff,
+            parameters.atmosphereScatteringStrength,
+            parameters.atmospherePhaseG,
+            parameters.atmospherePlanetRadius,
+            parameters.atmosphereRadius
+        );
+        fr = brdf.evaluate(rayOut, normal);
+        lambertianScattering = true;
+    }
 
     // If there are no light sources, we simply use the flash light source.
     if (uniforms.pointLightCount == 0 && uniforms.directionalLightCount == 0 && uniforms.rectangularLightCount == 0)
@@ -334,6 +349,22 @@ public SampleBRDFResult sampleBRDF(PhysicsBasedParameters parameters, float3 ray
         RetroreflectiveLambertianBRDF brdf = RetroreflectiveLambertianBRDF(parameters.albedo);
         fr = brdf.evaluate();
         sampledDirection = brdf.sample(rayOut);
+        sampledPdf = brdf.pdf(sampledDirection, rayOut, normal);
+    }
+    else if (parameters.brdfType == 5)
+    {
+        AtmosphereBRDF brdf = AtmosphereBRDF(
+            parameters.albedo,
+            parameters.atmosphereScatteringColor,
+            parameters.atmosphereAbsorptionColor,
+            parameters.atmosphereDensityFalloff,
+            parameters.atmosphereScatteringStrength,
+            parameters.atmospherePhaseG,
+            parameters.atmospherePlanetRadius,
+            parameters.atmosphereRadius
+        );
+        fr = brdf.evaluate(rayOut, normal);
+        sampledDirection = brdf.sample(rayOut, normal);
         sampledPdf = brdf.pdf(sampledDirection, rayOut, normal);
     }
 

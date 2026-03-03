@@ -6,6 +6,7 @@ __include "./brdf/glass.slang";
 
 __include "./brdf/retroreflective.slang";
 __include "./brdf/retroreflective_lambertian.slang";
+__include "./brdf/atmosphere.slang";
 
 public float3x3 getWorldToLocalMatrix(float3 normal, float3 rayOut)
 {

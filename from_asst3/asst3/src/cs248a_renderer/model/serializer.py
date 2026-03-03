@@ -187,6 +187,21 @@ class SceneSerializer:
             "smoothness": material.smoothness,
             "brdf_type": material.brdf_type.value,
             "ior": material.ior,
+            "atmosphere_scattering_color": [
+                material.atmosphere_scattering_color.x,
+                material.atmosphere_scattering_color.y,
+                material.atmosphere_scattering_color.z,
+            ],
+            "atmosphere_absorption_color": [
+                material.atmosphere_absorption_color.x,
+                material.atmosphere_absorption_color.y,
+                material.atmosphere_absorption_color.z,
+            ],
+            "atmosphere_density_falloff": material.atmosphere_density_falloff,
+            "atmosphere_scattering_strength": material.atmosphere_scattering_strength,
+            "atmosphere_phase_g": material.atmosphere_phase_g,
+            "atmosphere_planet_radius": material.atmosphere_planet_radius,
+            "atmosphere_radius": material.atmosphere_radius,
         }
         return material_data
 
@@ -430,6 +445,28 @@ class SceneSerializer:
             material.brdf_type = BRDFType(material_data["brdf_type"])
         if "ior" in material_data:
             material.ior = material_data["ior"]
+        if "atmosphere_scattering_color" in material_data:
+            color = material_data["atmosphere_scattering_color"]
+            material.atmosphere_scattering_color = glm.vec3(*color)
+        if "atmosphere_absorption_color" in material_data:
+            color = material_data["atmosphere_absorption_color"]
+            material.atmosphere_absorption_color = glm.vec3(*color)
+        if "atmosphere_density_falloff" in material_data:
+            material.atmosphere_density_falloff = material_data[
+                "atmosphere_density_falloff"
+            ]
+        if "atmosphere_scattering_strength" in material_data:
+            material.atmosphere_scattering_strength = material_data[
+                "atmosphere_scattering_strength"
+            ]
+        if "atmosphere_phase_g" in material_data:
+            material.atmosphere_phase_g = material_data["atmosphere_phase_g"]
+        if "atmosphere_planet_radius" in material_data:
+            material.atmosphere_planet_radius = material_data[
+                "atmosphere_planet_radius"
+            ]
+        if "atmosphere_radius" in material_data:
+            material.atmosphere_radius = material_data["atmosphere_radius"]
         return material
 
     def _create_o3d_mesh_from_triangles(
