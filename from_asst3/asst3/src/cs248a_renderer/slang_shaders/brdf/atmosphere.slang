@@ -5,10 +5,13 @@ import utils;
 public struct AtmosphereBRDF
 {
     public float3 surfaceAlbedo;
-    public float3 scatteringColor;
+    public float3 rayleighScatteringColor;
+    public float3 mieScatteringColor;
     public float3 absorptionColor;
-    public float densityFalloff;
-    public float scatteringStrength;
+    public float rayleighDensityFalloff;
+    public float mieDensityFalloff;
+    public float rayleighStrength;
+    public float mieStrength;
     public float phaseG;
     public float planetRadius;
     public float atmosphereRadius;
@@ -37,13 +40,35 @@ public struct AtmosphereBRDF
 
     public float getPhaseValue(float cosTheta)   // compute the scattering direction distribution
     {
-        float rayleighWeight = 0.6;
-        float mieWeight = 0.4;
-
         float rayleigh = getRayleighPhase(cosTheta);
         float mie = getMiePhase(cosTheta);
 
-        return rayleighWeight * rayleigh + mieWeight * mie;
+        return rayleighStrength * rayleigh + mieStrength * mie;
+    }
+
+    public float3 getScatteringCoefficient(float cosTheta)
+    {
+        float rayleigh = getRayleighPhase(cosTheta);
+        float mie = getMiePhase(cosTheta);
+        return rayleighScatteringColor * rayleighStrength * rayleigh +
+            mieScatteringColor * mieStrength * mie;
+    }
+
+    public float getRayleighDensity(float normalizedHeight)
+    {
+        return exp(-normalizedHeight * max(rayleighDensityFalloff, 0.0));
+    }
+
+    public float getMieDensity(float normalizedHeight)
+    {
+        return exp(-normalizedHeight * max(mieDensityFalloff, 0.0));
+    }
+
+    public float3 getExtinctionCoefficient(float rayleighDensity, float mieDensity)
+    {
+        return absorptionColor +
+            rayleighScatteringColor * rayleighStrength * rayleighDensity +
+            mieScatteringColor * mieStrength * mieDensity;
     }
 
     public float getPathLength(float3 direction, float3 normal)
@@ -57,9 +82,8 @@ public struct AtmosphereBRDF
 
     public float3 getTransmittance(float pathLength)
     {
-        float extinction = max(densityFalloff, 0.0);
-        float opticalDepth = extinction * max(pathLength, 0.0);
-        return exp(-absorptionColor * opticalDepth);
+        float opticalDepth = max(pathLength, 0.0);
+        return exp(-getExtinctionCoefficient(1.0, 1.0) * opticalDepth);
     }
 
     public float3 getViewTransmittance(float3 rayOut, float3 normal)
@@ -72,19 +96,16 @@ public struct AtmosphereBRDF
         float3 wo = normalize(rayOut);
         float3 wi = normalize(lightDirection);
 
-        float extinction = max(densityFalloff, 0.0);
         float viewPathLength = getPathLength(wo, normal);
         float lightPathLength = getPathLength(wi, normal);
-        float viewOpticalDepth = extinction * viewPathLength;
-        float lightOpticalDepth = extinction * lightPathLength;
+        float viewOpticalDepth = viewPathLength;
+        float lightOpticalDepth = lightPathLength;
         float combinedOpticalDepth = viewOpticalDepth + lightOpticalDepth;
 
-        float phase = getPhaseValue(dot(wo, wi));
         float scatterAmount = 1.0 - exp(-combinedOpticalDepth);
 
-        float3 lightTransmittance = exp(-absorptionColor * lightOpticalDepth);
-        float3 inScatteredLight =
-            scatteringColor * scatteringStrength * phase * scatterAmount * lightTransmittance;
+        float3 lightTransmittance = exp(-getExtinctionCoefficient(1.0, 1.0) * lightOpticalDepth);
+        float3 inScatteredLight = getScatteringCoefficient(dot(wo, wi)) * scatterAmount * lightTransmittance;
 
         return inScatteredLight;
     }

@@ -173,10 +173,13 @@ public Optional<RayMeshSampleResult> meshSample(float2 uv, RendererUniform unifo
                 {
                     AtmosphereBRDF atmosphere = AtmosphereBRDF(
                         parameters.albedo,
-                        parameters.atmosphereScatteringColor,
+                        parameters.atmosphereRayleighScatteringColor,
+                        parameters.atmosphereMieScatteringColor,
                         parameters.atmosphereAbsorptionColor,
-                        parameters.atmosphereDensityFalloff,
-                        parameters.atmosphereScatteringStrength,
+                        parameters.atmosphereRayleighDensityFalloff,
+                        parameters.atmosphereMieDensityFalloff,
+                        parameters.atmosphereRayleighStrength,
+                        parameters.atmosphereMieStrength,
                         parameters.atmospherePhaseG,
                         parameters.atmospherePlanetRadius,
                         parameters.atmospherePlanetRadius + parameters.atmosphereThickness

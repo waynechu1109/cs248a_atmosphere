@@ -188,18 +188,25 @@ class SceneSerializer:
             "brdf_type": material.brdf_type.value,
             "ior": material.ior,
             "atmosphere_enabled": material.atmosphere_enabled,
-            "atmosphere_scattering_color": [
-                material.atmosphere_scattering_color.x,
-                material.atmosphere_scattering_color.y,
-                material.atmosphere_scattering_color.z,
+            "atmosphere_rayleigh_scattering_color": [
+                material.atmosphere_rayleigh_scattering_color.x,
+                material.atmosphere_rayleigh_scattering_color.y,
+                material.atmosphere_rayleigh_scattering_color.z,
+            ],
+            "atmosphere_mie_scattering_color": [
+                material.atmosphere_mie_scattering_color.x,
+                material.atmosphere_mie_scattering_color.y,
+                material.atmosphere_mie_scattering_color.z,
             ],
             "atmosphere_absorption_color": [
                 material.atmosphere_absorption_color.x,
                 material.atmosphere_absorption_color.y,
                 material.atmosphere_absorption_color.z,
             ],
-            "atmosphere_density_falloff": material.atmosphere_density_falloff,
-            "atmosphere_scattering_strength": material.atmosphere_scattering_strength,
+            "atmosphere_rayleigh_density_falloff": material.atmosphere_rayleigh_density_falloff,
+            "atmosphere_mie_density_falloff": material.atmosphere_mie_density_falloff,
+            "atmosphere_rayleigh_strength": material.atmosphere_rayleigh_strength,
+            "atmosphere_mie_strength": material.atmosphere_mie_strength,
             "atmosphere_phase_g": material.atmosphere_phase_g,
             "atmosphere_planet_radius": material.atmosphere_planet_radius,
             "atmosphere_thickness": material.atmosphere_thickness,
@@ -453,20 +460,44 @@ class SceneSerializer:
             material.ior = material_data["ior"]
         if "atmosphere_enabled" in material_data:
             material.atmosphere_enabled = material_data["atmosphere_enabled"]
-        if "atmosphere_scattering_color" in material_data:
+        if "atmosphere_rayleigh_scattering_color" in material_data:
+            color = material_data["atmosphere_rayleigh_scattering_color"]
+            material.atmosphere_rayleigh_scattering_color = glm.vec3(*color)
+        elif "atmosphere_scattering_color" in material_data:
             color = material_data["atmosphere_scattering_color"]
-            material.atmosphere_scattering_color = glm.vec3(*color)
+            material.atmosphere_rayleigh_scattering_color = glm.vec3(*color)
+        if "atmosphere_mie_scattering_color" in material_data:
+            color = material_data["atmosphere_mie_scattering_color"]
+            material.atmosphere_mie_scattering_color = glm.vec3(*color)
         if "atmosphere_absorption_color" in material_data:
             color = material_data["atmosphere_absorption_color"]
             material.atmosphere_absorption_color = glm.vec3(*color)
-        if "atmosphere_density_falloff" in material_data:
-            material.atmosphere_density_falloff = material_data[
+        if "atmosphere_rayleigh_density_falloff" in material_data:
+            material.atmosphere_rayleigh_density_falloff = material_data[
+                "atmosphere_rayleigh_density_falloff"
+            ]
+        elif "atmosphere_density_falloff" in material_data:
+            material.atmosphere_rayleigh_density_falloff = material_data[
                 "atmosphere_density_falloff"
             ]
-        if "atmosphere_scattering_strength" in material_data:
-            material.atmosphere_scattering_strength = material_data[
+        if "atmosphere_mie_density_falloff" in material_data:
+            material.atmosphere_mie_density_falloff = material_data[
+                "atmosphere_mie_density_falloff"
+            ]
+        elif "atmosphere_density_falloff" in material_data:
+            material.atmosphere_mie_density_falloff = material_data[
+                "atmosphere_density_falloff"
+            ]
+        if "atmosphere_rayleigh_strength" in material_data:
+            material.atmosphere_rayleigh_strength = material_data[
+                "atmosphere_rayleigh_strength"
+            ]
+        elif "atmosphere_scattering_strength" in material_data:
+            material.atmosphere_rayleigh_strength = material_data[
                 "atmosphere_scattering_strength"
             ]
+        if "atmosphere_mie_strength" in material_data:
+            material.atmosphere_mie_strength = material_data["atmosphere_mie_strength"]
         if "atmosphere_phase_g" in material_data:
             material.atmosphere_phase_g = material_data["atmosphere_phase_g"]
         if "atmosphere_planet_radius" in material_data:

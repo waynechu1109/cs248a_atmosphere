@@ -16,6 +16,12 @@ public struct AtmosphereMarchResult
     public float3 transmittance;
 }
 
+public struct FilteredLightResult
+{
+    public float3 transmittance;
+    public bool occluded;
+}
+
 public float3 getSampleIrradiance(LightSample lightSample, float3 normal, bool isLambertian, float fallOffFactor = 1.0)
 {
     const float EPSILON = 1e-2;
@@ -93,12 +99,22 @@ public float3 evaluateFlashLightContribution(float3 hitPoint, float3 fr, float3 
     {
         return outgoingRadiance;
     }
+    FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+        hitPoint,
+        lightSample.lightDirection,
+        lightSample.lightDistance,
+        uniforms
+    );
+    if (filteredLight.occluded)
+    {
+        return outgoingRadiance;
+    }
 
     float3 sampleIrradiance = getSampleIrradiance(lightSample, normal, lambertianScattering, fallOffFactor);
     // PDF is used for Monte-Carlo integration. But it is only needed for light 
     // sources that have an area, for eg. rectangular light. Therefore, we are 
     // using `lightSample.pdf=1` here.
-    float3 irradiance = sampleIrradiance / lightSample.pdf;
+    float3 irradiance = (sampleIrradiance / lightSample.pdf) * filteredLight.transmittance;
     outgoingRadiance = fr * irradiance;
 
     return outgoingRadiance;
@@ -116,6 +132,16 @@ public float3 evaluatePointLightContribution(StructuredBuffer<PointLight> pointL
         {
             continue;
         }
+        FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+            hitPoint,
+            lightSample.lightDirection,
+            lightSample.lightDistance,
+            uniforms
+        );
+        if (filteredLight.occluded)
+        {
+            continue;
+        }
 
         // TODO: Student implementation starts here.
 
@@ -128,7 +154,7 @@ public float3 evaluatePointLightContribution(StructuredBuffer<PointLight> pointL
         // PDF is used for Monte-Carlo integration. But it is only needed for light
         // sources that have an area, for eg. rectangular light. Therefore, we are
         // using `lightSample.pdf=1` here.
-        float3 irradiance = sampleIrradiance / lightSample.pdf;
+        float3 irradiance = (sampleIrradiance / lightSample.pdf) * filteredLight.transmittance;
         outgoingRadiance += fr * irradiance;
     }
     return outgoingRadiance;
@@ -146,11 +172,21 @@ public float3 evaluateDirectionalLightContribution(StructuredBuffer<DirectionalL
         {
             continue;
         }
+        FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+            hitPoint,
+            lightSample.lightDirection,
+            lightSample.lightDistance,
+            uniforms
+        );
+        if (filteredLight.occluded)
+        {
+            continue;
+        }
         float3 sampleIrradiance = getSampleIrradiance(lightSample, normal, lambertianScattering, fallOffFactor);
         // PDF is used for Monte-Carlo integration. But it is only needed for light
         // sources that have an area, for eg. rectangular light. Therefore, we are
         // using `lightSample.pdf=1` here.
-        float3 irradiance = sampleIrradiance / lightSample.pdf;
+        float3 irradiance = (sampleIrradiance / lightSample.pdf) * filteredLight.transmittance;
         outgoingRadiance += fr * irradiance;
     }
     return outgoingRadiance;
@@ -174,8 +210,18 @@ public float3 evaluateRectangularLightContribution(StructuredBuffer<RectangularL
             {
                 continue;
             }
+            FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+                hitPoint,
+                lightSample.lightDirection,
+                lightSample.lightDistance,
+                uniforms
+            );
+            if (filteredLight.occluded)
+            {
+                continue;
+            }
             float3 sampleIrradiance = getSampleIrradiance(lightSample, normal, lambertianScattering, fallOffFactor);
-            accumulatedIrradiance += sampleIrradiance / lightSample.pdf;
+            accumulatedIrradiance += (sampleIrradiance / lightSample.pdf) * filteredLight.transmittance;
         }
         float3 irradiance = accumulatedIrradiance / uniforms.numRectangularLightSamples;
         // Monte-Carlo Integration over.
@@ -204,17 +250,20 @@ public float2 intersectSphere(float3 rayOrigin, float3 rayDirection, float3 sphe
     return float2(min(t0, t1), max(t0, t1));
 }
 
-public float getAtmosphereDensity(AtmosphereBRDF brdf, float3 sphereCenter, float3 samplePoint)
+public float2 getAtmosphereDensities(AtmosphereBRDF brdf, float3 sphereCenter, float3 samplePoint)
 {
     float shellThickness = max(brdf.getShellThickness(), 1e-4);
     float radius = length(samplePoint - sphereCenter);
     if (radius <= brdf.planetRadius || radius >= brdf.atmosphereRadius)
     {
-        return 0.0;
+        return float2(0.0);
     }
 
     float normalizedHeight = saturate((radius - brdf.planetRadius) / shellThickness);
-    return exp(-normalizedHeight * max(brdf.densityFalloff, 0.0));
+    return float2(
+        brdf.getRayleighDensity(normalizedHeight),
+        brdf.getMieDensity(normalizedHeight)
+    );
 }
 
 public bool isPlanetOccludingLight(float3 samplePoint, float3 lightDirection, float3 sphereCenter, float planetRadius, float maxDistance = float.maxValue)
@@ -248,27 +297,109 @@ public float3 getAtmosphereLightTransmittance(
     float shellThickness = max(brdf.getShellThickness(), 1e-4);
     float segmentLength = tEnd - tStart;
     float stepLength = segmentLength / LIGHT_STEPS;
-    float opticalDepth = 0.0;
+    float rayleighOpticalDepth = 0.0;
+    float mieOpticalDepth = 0.0;
 
     [MaxIters(LIGHT_STEPS)]
     for (uint i = 0; i < LIGHT_STEPS; ++i)
     {
         float t = tStart + (float(i) + 0.5) * stepLength;
         float3 position = samplePoint + direction * t;
-        opticalDepth += getAtmosphereDensity(brdf, sphereCenter, position) * (stepLength / shellThickness);
+        float2 densities = getAtmosphereDensities(brdf, sphereCenter, position);
+        rayleighOpticalDepth += densities.x * (stepLength / shellThickness);
+        mieOpticalDepth += densities.y * (stepLength / shellThickness);
     }
 
-    return exp(-brdf.absorptionColor * opticalDepth);
+    return exp(-brdf.getExtinctionCoefficient(rayleighOpticalDepth, mieOpticalDepth));
+}
+
+public FilteredLightResult filterLightThroughAtmospheres(float3 hitPoint, float3 lightDirection, float lightDistance, RendererUniform uniforms)
+{
+    FilteredLightResult result = FilteredLightResult(float3(1.0), false);
+    float3 direction = normalize(lightDirection);
+    float maxDistance = lightDistance;
+
+    for (uint materialId = 0; materialId < uniforms.materialCount; ++materialId)
+    {
+        PhysicsBasedMaterial material = uniforms.physicsBasedMaterialBuf[materialId];
+        if (material.atmosphereEnabled == 0 || material.atmosphereThickness <= 0.0)
+        {
+            continue;
+        }
+
+        float3 sphereCenter = material.atmosphereCenter;
+        float outerRadius = material.atmospherePlanetRadius + material.atmosphereThickness;
+        float2 atmosphereRange = intersectSphere(hitPoint + direction * 1e-3, direction, sphereCenter, outerRadius);
+        float tEntry = max(atmosphereRange.x, 0.0);
+        float tExit = min(atmosphereRange.y, maxDistance);
+        if (tExit <= tEntry)
+        {
+            continue;
+        }
+
+        float2 planetRange = intersectSphere(hitPoint + direction * 1e-3, direction, sphereCenter, material.atmospherePlanetRadius);
+        if (planetRange.y > 0.0 && planetRange.x < maxDistance)
+        {
+            float planetEntry = max(planetRange.x, 0.0);
+            if (planetEntry <= tEntry + 1e-3)
+            {
+                return FilteredLightResult(float3(0.0), true);
+            }
+            tExit = min(tExit, planetEntry);
+        }
+
+        if (tExit <= tEntry)
+        {
+            continue;
+        }
+
+        AtmosphereBRDF brdf = AtmosphereBRDF(
+            material.albedo.uniformData,
+            material.atmosphereRayleighScatteringColor,
+            material.atmosphereMieScatteringColor,
+            material.atmosphereAbsorptionColor,
+            material.atmosphereRayleighDensityFalloff,
+            material.atmosphereMieDensityFalloff,
+            material.atmosphereRayleighStrength,
+            material.atmosphereMieStrength,
+            material.atmospherePhaseG,
+            material.atmospherePlanetRadius,
+            outerRadius
+        );
+
+        const uint LIGHT_FILTER_STEPS = 12;
+        float shellThickness = max(brdf.getShellThickness(), 1e-4);
+        float stepLength = (tExit - tEntry) / LIGHT_FILTER_STEPS;
+        float rayleighOpticalDepth = 0.0;
+        float mieOpticalDepth = 0.0;
+
+        [MaxIters(LIGHT_FILTER_STEPS)]
+        for (uint stepIdx = 0; stepIdx < LIGHT_FILTER_STEPS; ++stepIdx)
+        {
+            float t = tEntry + (float(stepIdx) + 0.5) * stepLength;
+            float3 samplePoint = hitPoint + direction * t;
+            float2 densities = getAtmosphereDensities(brdf, sphereCenter, samplePoint);
+            rayleighOpticalDepth += densities.x * (stepLength / shellThickness);
+            mieOpticalDepth += densities.y * (stepLength / shellThickness);
+        }
+
+        result.transmittance *= exp(-brdf.getExtinctionCoefficient(rayleighOpticalDepth, mieOpticalDepth));
+    }
+
+    return result;
 }
 
 public AtmosphereBRDF makeAtmosphereBRDF(PhysicsBasedParameters parameters)
 {
     return AtmosphereBRDF(
         parameters.albedo,
-        parameters.atmosphereScatteringColor,
+        parameters.atmosphereRayleighScatteringColor,
+        parameters.atmosphereMieScatteringColor,
         parameters.atmosphereAbsorptionColor,
-        parameters.atmosphereDensityFalloff,
-        parameters.atmosphereScatteringStrength,
+        parameters.atmosphereRayleighDensityFalloff,
+        parameters.atmosphereMieDensityFalloff,
+        parameters.atmosphereRayleighStrength,
+        parameters.atmosphereMieStrength,
         parameters.atmospherePhaseG,
         parameters.atmospherePlanetRadius,
         parameters.atmospherePlanetRadius + parameters.atmosphereThickness
@@ -363,21 +494,23 @@ public AtmosphereMarchResult marchAtmosphere(
     {
         float t = tStart + (float(i) + 0.5) * stepLength;
         float3 samplePoint = rayOrigin + rayDirection * t;
-        float density = getAtmosphereDensity(brdf, sphereCenter, samplePoint);
-        if (density <= 1e-5)
+        float2 densities = getAtmosphereDensities(brdf, sphereCenter, samplePoint);
+        if (densities.x <= 1e-5 && densities.y <= 1e-5)
         {
             continue;
         }
 
-        float normalizedStep = density * (stepLength / shellThickness);
+        float rayleighStep = densities.x * (stepLength / shellThickness);
+        float mieStep = densities.y * (stepLength / shellThickness);
+        float normalizedStep = 0.5 * (rayleighStep + mieStep);
         float3 stepScattering = float3(0.0);
 
         if (uniforms.pointLightCount == 0 && uniforms.directionalLightCount == 0 && uniforms.rectangularLightCount == 0)
         {
             LightSample lightSample = FlashLight().sample(viewDirection);
             float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection, lightSample.lightDistance);
-            float phase = brdf.getPhaseValue(dot(viewDirection, normalize(lightSample.lightDirection)));
-            stepScattering += brdf.scatteringColor * brdf.scatteringStrength * normalizedStep * phase * lightTransmittance * lightSample.radiance;
+            float3 scatteringCoefficient = brdf.getScatteringCoefficient(dot(viewDirection, normalize(lightSample.lightDirection)));
+            stepScattering += scatteringCoefficient * normalizedStep * lightTransmittance * lightSample.radiance;
         }
 
         for (int lightIdx = 0; lightIdx < uniforms.pointLightCount; ++lightIdx)
@@ -385,16 +518,16 @@ public AtmosphereMarchResult marchAtmosphere(
             LightSample lightSample = uniforms.pointLightBuf[lightIdx].sample(samplePoint);
             float distanceFalloff = max(lightSample.lightDistance * lightSample.lightDistance, 1e-4);
             float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection, lightSample.lightDistance);
-            float phase = brdf.getPhaseValue(dot(viewDirection, normalize(lightSample.lightDirection)));
-            stepScattering += brdf.scatteringColor * brdf.scatteringStrength * normalizedStep * phase * lightTransmittance * (lightSample.radiance / distanceFalloff);
+            float3 scatteringCoefficient = brdf.getScatteringCoefficient(dot(viewDirection, normalize(lightSample.lightDirection)));
+            stepScattering += scatteringCoefficient * normalizedStep * lightTransmittance * (lightSample.radiance / distanceFalloff);
         }
 
         for (int lightIdx = 0; lightIdx < uniforms.directionalLightCount; ++lightIdx)
         {
             LightSample lightSample = uniforms.directionalLightBuf[lightIdx].sample();
             float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection);
-            float phase = brdf.getPhaseValue(dot(viewDirection, normalize(lightSample.lightDirection)));
-            stepScattering += brdf.scatteringColor * brdf.scatteringStrength * normalizedStep * phase * lightTransmittance * lightSample.radiance;
+            float3 scatteringCoefficient = brdf.getScatteringCoefficient(dot(viewDirection, normalize(lightSample.lightDirection)));
+            stepScattering += scatteringCoefficient * normalizedStep * lightTransmittance * lightSample.radiance;
         }
 
         for (int lightIdx = 0; lightIdx < uniforms.rectangularLightCount; ++lightIdx)
@@ -409,8 +542,8 @@ public AtmosphereMarchResult marchAtmosphere(
                 );
                 LightSample lightSample = uniforms.rectangularLightBuf[lightIdx].sample(samplePoint, epsilon);
                 float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection, lightSample.lightDistance);
-                float phase = brdf.getPhaseValue(dot(viewDirection, normalize(lightSample.lightDirection)));
-                accumulatedRectangular += brdf.scatteringColor * brdf.scatteringStrength * normalizedStep * phase * lightTransmittance * (lightSample.radiance / max(lightSample.pdf, 1e-4));
+                float3 scatteringCoefficient = brdf.getScatteringCoefficient(dot(viewDirection, normalize(lightSample.lightDirection)));
+                accumulatedRectangular += scatteringCoefficient * normalizedStep * lightTransmittance * (lightSample.radiance / max(lightSample.pdf, 1e-4));
                 validSamples++;
             }
 
@@ -421,7 +554,7 @@ public AtmosphereMarchResult marchAtmosphere(
         }
 
         inscatteredRadiance += transmittance * stepScattering;
-        transmittance *= exp(-brdf.absorptionColor * normalizedStep);
+        transmittance *= exp(-brdf.getExtinctionCoefficient(rayleighStep, mieStep));
     }
 
     return AtmosphereMarchResult(inscatteredRadiance, transmittance);
@@ -603,10 +736,13 @@ public SampleBRDFResult sampleBRDF(PhysicsBasedParameters parameters, float3 ray
     {
         AtmosphereBRDF brdf = AtmosphereBRDF(
             parameters.albedo,
-            parameters.atmosphereScatteringColor,
+            parameters.atmosphereRayleighScatteringColor,
+            parameters.atmosphereMieScatteringColor,
             parameters.atmosphereAbsorptionColor,
-            parameters.atmosphereDensityFalloff,
-            parameters.atmosphereScatteringStrength,
+            parameters.atmosphereRayleighDensityFalloff,
+            parameters.atmosphereMieDensityFalloff,
+            parameters.atmosphereRayleighStrength,
+            parameters.atmosphereMieStrength,
             parameters.atmospherePhaseG,
             parameters.atmospherePlanetRadius,
             parameters.atmospherePlanetRadius + parameters.atmosphereThickness

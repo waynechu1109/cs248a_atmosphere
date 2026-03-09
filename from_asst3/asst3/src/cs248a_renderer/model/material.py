@@ -158,14 +158,19 @@ class PhysicsBasedMaterial:
     ior: float = 1.5  # Index of Refraction (default: glass ~1.5)
     brdf_type: BRDFType = BRDFType.RETROREFLECTIVE_LAMBERTIAN
     atmosphere_enabled: bool = False
-    atmosphere_scattering_color: glm.vec3 = field(
+    atmosphere_rayleigh_scattering_color: glm.vec3 = field(
         default_factory=lambda: glm.vec3(0.45, 0.67, 1.0)
+    )
+    atmosphere_mie_scattering_color: glm.vec3 = field(
+        default_factory=lambda: glm.vec3(1.0, 0.72, 0.45)
     )
     atmosphere_absorption_color: glm.vec3 = field(
         default_factory=lambda: glm.vec3(1.0, 0.55, 0.2)
     )
-    atmosphere_density_falloff: float = 4.0
-    atmosphere_scattering_strength: float = 1.0
+    atmosphere_rayleigh_density_falloff: float = 6.0
+    atmosphere_mie_density_falloff: float = 1.5
+    atmosphere_rayleigh_strength: float = 1.0
+    atmosphere_mie_strength: float = 0.35
     atmosphere_phase_g: float = 0.35
     atmosphere_planet_radius: float = 1.0
     atmosphere_thickness: float = 0.15
@@ -179,10 +184,13 @@ class PhysicsBasedMaterial:
             "brdfType": self.brdf_type.value,
             "ior": self.ior,
             "atmosphereEnabled": 1 if self.atmosphere_enabled else 0,
-            "atmosphereScatteringColor": self.atmosphere_scattering_color,
+            "atmosphereRayleighScatteringColor": self.atmosphere_rayleigh_scattering_color,
+            "atmosphereMieScatteringColor": self.atmosphere_mie_scattering_color,
             "atmosphereAbsorptionColor": self.atmosphere_absorption_color,
-            "atmosphereDensityFalloff": self.atmosphere_density_falloff,
-            "atmosphereScatteringStrength": self.atmosphere_scattering_strength,
+            "atmosphereRayleighDensityFalloff": self.atmosphere_rayleigh_density_falloff,
+            "atmosphereMieDensityFalloff": self.atmosphere_mie_density_falloff,
+            "atmosphereRayleighStrength": self.atmosphere_rayleigh_strength,
+            "atmosphereMieStrength": self.atmosphere_mie_strength,
             "atmospherePhaseG": self.atmosphere_phase_g,
             "atmospherePlanetRadius": self.atmosphere_planet_radius,
             "atmosphereThickness": self.atmosphere_thickness,

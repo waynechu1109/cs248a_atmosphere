@@ -396,15 +396,27 @@ class SceneEditorWindow(Window):
             return
 
         changed, color = imgui.color_edit3(
-            f"Scattering Color##{name}",
+            f"Rayleigh Color##{name}",
             [
-                material.atmosphere_scattering_color.x,
-                material.atmosphere_scattering_color.y,
-                material.atmosphere_scattering_color.z,
+                material.atmosphere_rayleigh_scattering_color.x,
+                material.atmosphere_rayleigh_scattering_color.y,
+                material.atmosphere_rayleigh_scattering_color.z,
             ],
         )
         if changed:
-            material.atmosphere_scattering_color = glm.vec3(*color)
+            material.atmosphere_rayleigh_scattering_color = glm.vec3(*color)
+            self._mesh_outdated.on_next(True)
+
+        changed, color = imgui.color_edit3(
+            f"Mie Color##{name}",
+            [
+                material.atmosphere_mie_scattering_color.x,
+                material.atmosphere_mie_scattering_color.y,
+                material.atmosphere_mie_scattering_color.z,
+            ],
+        )
+        if changed:
+            material.atmosphere_mie_scattering_color = glm.vec3(*color)
             self._mesh_outdated.on_next(True)
 
         changed, color = imgui.color_edit3(
@@ -419,26 +431,48 @@ class SceneEditorWindow(Window):
             material.atmosphere_absorption_color = glm.vec3(*color)
             self._mesh_outdated.on_next(True)
 
-        changed, density_falloff = imgui.drag_float(
-            f"Density Falloff##{name}",
-            material.atmosphere_density_falloff,
+        changed, rayleigh_density_falloff = imgui.drag_float(
+            f"Rayleigh Falloff##{name}",
+            material.atmosphere_rayleigh_density_falloff,
             v_speed=0.05,
             v_min=0.0,
             v_max=32.0,
         )
         if changed:
-            material.atmosphere_density_falloff = density_falloff
+            material.atmosphere_rayleigh_density_falloff = rayleigh_density_falloff
             self._mesh_outdated.on_next(True)
 
-        changed, scattering_strength = imgui.drag_float(
-            f"Scattering Strength##{name}",
-            material.atmosphere_scattering_strength,
+        changed, mie_density_falloff = imgui.drag_float(
+            f"Mie Falloff##{name}",
+            material.atmosphere_mie_density_falloff,
+            v_speed=0.05,
+            v_min=0.0,
+            v_max=32.0,
+        )
+        if changed:
+            material.atmosphere_mie_density_falloff = mie_density_falloff
+            self._mesh_outdated.on_next(True)
+
+        changed, rayleigh_strength = imgui.drag_float(
+            f"Rayleigh Strength##{name}",
+            material.atmosphere_rayleigh_strength,
             v_speed=0.01,
             v_min=0.0,
             v_max=16.0,
         )
         if changed:
-            material.atmosphere_scattering_strength = scattering_strength
+            material.atmosphere_rayleigh_strength = rayleigh_strength
+            self._mesh_outdated.on_next(True)
+
+        changed, mie_strength = imgui.drag_float(
+            f"Mie Strength##{name}",
+            material.atmosphere_mie_strength,
+            v_speed=0.01,
+            v_min=0.0,
+            v_max=16.0,
+        )
+        if changed:
+            material.atmosphere_mie_strength = mie_strength
             self._mesh_outdated.on_next(True)
 
         changed, phase_g = imgui.drag_float(
