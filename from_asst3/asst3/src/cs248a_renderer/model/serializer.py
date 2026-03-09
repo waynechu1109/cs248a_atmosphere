@@ -187,6 +187,7 @@ class SceneSerializer:
             "smoothness": material.smoothness,
             "brdf_type": material.brdf_type.value,
             "ior": material.ior,
+            "atmosphere_enabled": material.atmosphere_enabled,
             "atmosphere_scattering_color": [
                 material.atmosphere_scattering_color.x,
                 material.atmosphere_scattering_color.y,
@@ -201,7 +202,12 @@ class SceneSerializer:
             "atmosphere_scattering_strength": material.atmosphere_scattering_strength,
             "atmosphere_phase_g": material.atmosphere_phase_g,
             "atmosphere_planet_radius": material.atmosphere_planet_radius,
-            "atmosphere_radius": material.atmosphere_radius,
+            "atmosphere_thickness": material.atmosphere_thickness,
+            "atmosphere_center": [
+                material.atmosphere_center.x,
+                material.atmosphere_center.y,
+                material.atmosphere_center.z,
+            ],
         }
         return material_data
 
@@ -445,6 +451,8 @@ class SceneSerializer:
             material.brdf_type = BRDFType(material_data["brdf_type"])
         if "ior" in material_data:
             material.ior = material_data["ior"]
+        if "atmosphere_enabled" in material_data:
+            material.atmosphere_enabled = material_data["atmosphere_enabled"]
         if "atmosphere_scattering_color" in material_data:
             color = material_data["atmosphere_scattering_color"]
             material.atmosphere_scattering_color = glm.vec3(*color)
@@ -465,8 +473,15 @@ class SceneSerializer:
             material.atmosphere_planet_radius = material_data[
                 "atmosphere_planet_radius"
             ]
-        if "atmosphere_radius" in material_data:
-            material.atmosphere_radius = material_data["atmosphere_radius"]
+        if "atmosphere_thickness" in material_data:
+            material.atmosphere_thickness = material_data["atmosphere_thickness"]
+        elif "atmosphere_radius" in material_data:
+            material.atmosphere_thickness = max(
+                material_data["atmosphere_radius"] - material.atmosphere_planet_radius,
+                0.0,
+            )
+        if "atmosphere_center" in material_data:
+            material.atmosphere_center = glm.vec3(*material_data["atmosphere_center"])
         return material
 
     def _create_o3d_mesh_from_triangles(

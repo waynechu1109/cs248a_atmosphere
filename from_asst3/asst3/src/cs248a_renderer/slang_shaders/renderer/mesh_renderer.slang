@@ -11,6 +11,46 @@ public struct RayMeshSampleResult
     public float4 color;
 }
 
+public struct AtmosphereHitResult
+{
+    public uint materialId;
+    public float tEntry;
+    public float tExit;
+}
+
+public Optional<AtmosphereHitResult> rayAtmosphereIntersection(Ray ray, RendererUniform uniforms, float tLimit = float.maxValue)
+{
+    Optional<AtmosphereHitResult> closest = Optional<AtmosphereHitResult>();
+    float closestEntry = float.maxValue;
+
+    for (uint materialId = 0; materialId < uniforms.materialCount; ++materialId)
+    {
+        PhysicsBasedMaterial material = uniforms.physicsBasedMaterialBuf[materialId];
+        if (material.atmosphereEnabled == 0 || material.atmosphereThickness <= 0.0)
+        {
+            continue;
+        }
+
+        float outerRadius = material.atmospherePlanetRadius + material.atmosphereThickness;
+        float2 shellRange = intersectSphere(ray.origin, ray.direction, material.atmosphereCenter, outerRadius);
+        float tEntry = max(max(shellRange.x, ray.tRange.x), 0.0);
+        float tExit = min(shellRange.y, min(ray.tRange.y, tLimit));
+
+        if (tExit <= tEntry)
+        {
+            continue;
+        }
+
+        if (!closest.hasValue || tEntry < closestEntry)
+        {
+            closestEntry = tEntry;
+            closest = Optional<AtmosphereHitResult>(AtmosphereHitResult(materialId, tEntry, tExit));
+        }
+    }
+
+    return closest;
+}
+
 public Optional<RayMeshSampleResult> meshSample(float2 uv, RendererUniform uniforms, inout RNG rng)
 {
     Ray ray = uniforms.camera.generateRay(uv);
@@ -33,6 +73,39 @@ public Optional<RayMeshSampleResult> meshSample(float2 uv, RendererUniform unifo
             // Use the radiance of whichever one (light source or mesh) that's closer.
             Optional<RectangularLight.LightHitResult> rayRectangularLightIntersectionResult = rayRectangularLightIntersection(ray, uniforms);
             Optional<RayMeshIntersectionResult> rayMeshIntersectionResult = rayMeshIntersection(ray, uniforms);
+            float nearestSceneT = float.maxValue;
+            if (rayRectangularLightIntersectionResult.hasValue)
+            {
+                nearestSceneT = min(nearestSceneT, rayRectangularLightIntersectionResult.value.t);
+            }
+            if (rayMeshIntersectionResult.hasValue)
+            {
+                nearestSceneT = min(nearestSceneT, rayMeshIntersectionResult.value.closestHit.t);
+            }
+
+            Optional<AtmosphereHitResult> atmosphereHitResult = rayAtmosphereIntersection(ray, uniforms, nearestSceneT);
+            if (atmosphereHitResult.hasValue)
+            {
+                PhysicsBasedMaterial atmosphereMaterial = uniforms.physicsBasedMaterialBuf[atmosphereHitResult.value.materialId];
+                PhysicsBasedParameters atmosphereParameters = sampleMaterial(atmosphereMaterial);
+                AtmosphereMarchResult atmosphereResult = marchAtmosphere(
+                    atmosphereParameters,
+                    uniforms,
+                    ray.origin,
+                    normalize(ray.direction),
+                    atmosphereHitResult.value.tEntry,
+                    atmosphereHitResult.value.tExit
+                );
+                radiance += throughput * atmosphereResult.inscatteredRadiance;
+                throughput *= atmosphereResult.transmittance;
+
+                if (depth == 0 && t == float.maxValue)
+                {
+                    t = atmosphereHitResult.value.tEntry;
+                    float3 atmosphereHitPoint = ray.origin + t * ray.direction;
+                    normalAtFirstHit = normalize(atmosphereHitPoint - atmosphereMaterial.atmosphereCenter);
+                }
+            }
 
             // If the ray does not intersect with any light source or mesh.
             if (!rayRectangularLightIntersectionResult.hasValue && !rayMeshIntersectionResult.hasValue)
@@ -95,6 +168,33 @@ public Optional<RayMeshSampleResult> meshSample(float2 uv, RendererUniform unifo
                 float3 rayOut = -ray.direction;
                 float3 directIllumination = getDirectIllumination(parameters, uniforms, rayOut, normal, hitPoint, rng);
                 radiance += directIllumination * throughput;
+
+                if (parameters.brdfType == 5)
+                {
+                    AtmosphereBRDF atmosphere = AtmosphereBRDF(
+                        parameters.albedo,
+                        parameters.atmosphereScatteringColor,
+                        parameters.atmosphereAbsorptionColor,
+                        parameters.atmosphereDensityFalloff,
+                        parameters.atmosphereScatteringStrength,
+                        parameters.atmospherePhaseG,
+                        parameters.atmospherePlanetRadius,
+                        parameters.atmospherePlanetRadius + parameters.atmosphereThickness
+                    );
+
+                    throughput *= atmosphere.getViewTransmittance(rayOut, normal);
+                    ray.origin = hitPoint + normalize(ray.direction) * EPSILON;
+                    ray.direction = normalize(ray.direction);
+                    ray.tRange = float2(EPSILON, float.maxValue);
+                    renderLight = true;
+
+                    if (max(throughput.x, max(throughput.y, throughput.z)) < 1e-3)
+                    {
+                        breakRendering = true;
+                    }
+
+                    break;
+                }
 
                 // TODO: Student implementation starts here.
                 // Step 4: Setup for Indirect Illumination by sampling the BRDF for

@@ -13,36 +13,80 @@ public struct AtmosphereBRDF
     public float planetRadius;
     public float atmosphereRadius;
 
-    public float getShellThickness()
+    public float getShellThickness()   // get the thickness of atmosphere
     {
         float shellThickness = max(atmosphereRadius - planetRadius, 0.0);
         return shellThickness;
     }
 
-    public float getPhaseValue(float cosTheta)
+    public float getRayleighPhase(float cosTheta)
     {
-        float g = clamp(phaseG, -0.99, 0.99);
-        float denom = pow(max(1.0 + g * g - 2.0 * g * cosTheta, 1e-4), 1.5);
-        return (1.0 - g * g) / (4.0 * PI * denom);
+        float c = clamp(cosTheta, -1.0, 1.0);
+        return (3.0 / (16.0 * PI)) * (1.0 + c * c);
     }
 
-    public float3 evaluate(float3 rayOut, float3 normal)
+    public float getMiePhase(float cosTheta)
+    {
+        float c = clamp(cosTheta, -1.0, 1.0);
+        float g = clamp(phaseG, -0.999, 0.999);
+        float gg = g * g;
+        float denom = max(1.0 + gg - 2.0 * g * c, 1e-6);
+
+        return (1.0 - gg) / (4.0 * PI * pow(denom, 1.5));
+    }
+
+    public float getPhaseValue(float cosTheta)   // compute the scattering direction distribution
+    {
+        float rayleighWeight = 0.6;
+        float mieWeight = 0.4;
+
+        float rayleigh = getRayleighPhase(cosTheta);
+        float mie = getMiePhase(cosTheta);
+
+        return rayleighWeight * rayleigh + mieWeight * mie;
+    }
+
+    public float getPathLength(float3 direction, float3 normal)
     {
         float3 n = normalize(normal);
+        float3 w = normalize(direction);
+        float cosTheta = max(abs(dot(n, w)), 1e-3);
+        float shellThickness = max(getShellThickness(), 1e-4);
+        return shellThickness / cosTheta;
+    }
+
+    public float3 getTransmittance(float pathLength)
+    {
+        float extinction = max(densityFalloff, 0.0);
+        float opticalDepth = extinction * max(pathLength, 0.0);
+        return exp(-absorptionColor * opticalDepth);
+    }
+
+    public float3 getViewTransmittance(float3 rayOut, float3 normal)
+    {
+        return getTransmittance(getPathLength(rayOut, normal));
+    }
+
+    public float3 evaluate(float3 rayOut, float3 normal, float3 lightDirection)
+    {
         float3 wo = normalize(rayOut);
-        if (dot(n, wo) < 0.0)
-        {
-            n = -n;
-        }
+        float3 wi = normalize(lightDirection);
 
-        float shellDensity = 1.0 - exp(-max(densityFalloff, 0.0) * max(getShellThickness(), 1e-4));
-        float viewAltitude = 1.0 - clamp(dot(n, wo), 0.0, 1.0);
-        float phase = getPhaseValue(clamp(dot(wo, n), -1.0, 1.0));
-        float3 transmittance = exp(-absorptionColor * shellDensity);
-        float3 scattering = scatteringColor * scatteringStrength * shellDensity;
-        float horizonBoost = 0.15 + 0.85 * viewAltitude;
+        float extinction = max(densityFalloff, 0.0);
+        float viewPathLength = getPathLength(wo, normal);
+        float lightPathLength = getPathLength(wi, normal);
+        float viewOpticalDepth = extinction * viewPathLength;
+        float lightOpticalDepth = extinction * lightPathLength;
+        float combinedOpticalDepth = viewOpticalDepth + lightOpticalDepth;
 
-        return surfaceAlbedo * transmittance + scattering * horizonBoost * (0.5 + phase);
+        float phase = getPhaseValue(dot(wo, wi));
+        float scatterAmount = 1.0 - exp(-combinedOpticalDepth);
+
+        float3 lightTransmittance = exp(-absorptionColor * lightOpticalDepth);
+        float3 inScatteredLight =
+            scatteringColor * scatteringStrength * phase * scatterAmount * lightTransmittance;
+
+        return inScatteredLight;
     }
 
     public float3 sample(float3 rayOut, float3 normal)

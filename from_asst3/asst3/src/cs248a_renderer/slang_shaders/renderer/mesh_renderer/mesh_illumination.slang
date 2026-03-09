@@ -10,6 +10,12 @@ public struct SampleBRDFResult
     public float sampledPdf;
 }
 
+public struct AtmosphereMarchResult
+{
+    public float3 inscatteredRadiance;
+    public float3 transmittance;
+}
+
 public float3 getSampleIrradiance(LightSample lightSample, float3 normal, bool isLambertian, float fallOffFactor = 1.0)
 {
     const float EPSILON = 1e-2;
@@ -179,12 +185,255 @@ public float3 evaluateRectangularLightContribution(StructuredBuffer<RectangularL
     return outgoingRadiance;
 }
 
+public float2 intersectSphere(float3 rayOrigin, float3 rayDirection, float3 sphereCenter, float sphereRadius)
+{
+    float3 oc = rayOrigin - sphereCenter;
+    float a = dot(rayDirection, rayDirection);
+    float b = 2.0 * dot(oc, rayDirection);
+    float c = dot(oc, oc) - sphereRadius * sphereRadius;
+    float discriminant = b * b - 4.0 * a * c;
+    if (discriminant < 0.0)
+    {
+        return float2(float.maxValue, -float.maxValue);
+    }
+
+    float sqrtDiscriminant = sqrt(discriminant);
+    float invDenom = 0.5 / max(a, 1e-6);
+    float t0 = (-b - sqrtDiscriminant) * invDenom;
+    float t1 = (-b + sqrtDiscriminant) * invDenom;
+    return float2(min(t0, t1), max(t0, t1));
+}
+
+public float getAtmosphereDensity(AtmosphereBRDF brdf, float3 sphereCenter, float3 samplePoint)
+{
+    float shellThickness = max(brdf.getShellThickness(), 1e-4);
+    float radius = length(samplePoint - sphereCenter);
+    if (radius <= brdf.planetRadius || radius >= brdf.atmosphereRadius)
+    {
+        return 0.0;
+    }
+
+    float normalizedHeight = saturate((radius - brdf.planetRadius) / shellThickness);
+    return exp(-normalizedHeight * max(brdf.densityFalloff, 0.0));
+}
+
+public bool isPlanetOccludingLight(float3 samplePoint, float3 lightDirection, float3 sphereCenter, float planetRadius, float maxDistance = float.maxValue)
+{
+    float2 hitRange = intersectSphere(samplePoint + normalize(lightDirection) * 1e-3, normalize(lightDirection), sphereCenter, planetRadius);
+    return hitRange.x < maxDistance && hitRange.y > 0.0;
+}
+
+public float3 getAtmosphereLightTransmittance(
+    AtmosphereBRDF brdf,
+    float3 sphereCenter,
+    float3 samplePoint,
+    float3 lightDirection,
+    float maxDistance = float.maxValue)
+{
+    const uint LIGHT_STEPS = 8;
+    float3 direction = normalize(lightDirection);
+    if (isPlanetOccludingLight(samplePoint, direction, sphereCenter, brdf.planetRadius, maxDistance))
+    {
+        return float3(0.0);
+    }
+
+    float2 shellRange = intersectSphere(samplePoint + direction * 1e-3, direction, sphereCenter, brdf.atmosphereRadius);
+    float tStart = max(shellRange.x, 0.0);
+    float tEnd = min(shellRange.y, maxDistance);
+    if (tEnd <= tStart)
+    {
+        return float3(1.0);
+    }
+
+    float shellThickness = max(brdf.getShellThickness(), 1e-4);
+    float segmentLength = tEnd - tStart;
+    float stepLength = segmentLength / LIGHT_STEPS;
+    float opticalDepth = 0.0;
+
+    [MaxIters(LIGHT_STEPS)]
+    for (uint i = 0; i < LIGHT_STEPS; ++i)
+    {
+        float t = tStart + (float(i) + 0.5) * stepLength;
+        float3 position = samplePoint + direction * t;
+        opticalDepth += getAtmosphereDensity(brdf, sphereCenter, position) * (stepLength / shellThickness);
+    }
+
+    return exp(-brdf.absorptionColor * opticalDepth);
+}
+
+public AtmosphereBRDF makeAtmosphereBRDF(PhysicsBasedParameters parameters)
+{
+    return AtmosphereBRDF(
+        parameters.albedo,
+        parameters.atmosphereScatteringColor,
+        parameters.atmosphereAbsorptionColor,
+        parameters.atmosphereDensityFalloff,
+        parameters.atmosphereScatteringStrength,
+        parameters.atmospherePhaseG,
+        parameters.atmospherePlanetRadius,
+        parameters.atmospherePlanetRadius + parameters.atmosphereThickness
+    );
+}
+
+public float3 getAtmosphereDirectIllumination(PhysicsBasedParameters parameters, RendererUniform uniforms, float3 rayOut, float3 normal, float3 hitPoint, inout RNG rng)
+{
+    float3 outgoingRadiance = float3(0.0);
+    const float ATMOSPHERE_BRIGHTNESS_SCALE = 6.0;
+    const float EPSILON = 1e-2;
+    AtmosphereBRDF brdf = makeAtmosphereBRDF(parameters);
+
+    if (uniforms.pointLightCount == 0 && uniforms.directionalLightCount == 0 && uniforms.rectangularLightCount == 0)
+    {
+        LightSample lightSample = FlashLight().sample(rayOut);
+        float3 irradiance = lightSample.radiance / lightSample.pdf;
+        float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
+        float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
+        return atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
+    }
+
+    for (int i = 0; i < uniforms.pointLightCount; i++)
+    {
+        LightSample lightSample = uniforms.pointLightBuf[i].sample(hitPoint);
+        float fallOffFactor = lightSample.lightDistance * lightSample.lightDistance;
+        float3 irradiance = lightSample.radiance / ((fallOffFactor + EPSILON) * lightSample.pdf);
+        float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
+        float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
+        outgoingRadiance += atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
+    }
+
+    for (int i = 0; i < uniforms.directionalLightCount; i++)
+    {
+        LightSample lightSample = uniforms.directionalLightBuf[i].sample();
+        float3 irradiance = lightSample.radiance / lightSample.pdf;
+        float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
+        float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
+        outgoingRadiance += atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
+    }
+
+    for (int i = 0; i < uniforms.rectangularLightCount; i++)
+    {
+        float3 accumulatedContribution = float3(0.0);
+        int validSamples = 0;
+
+        for (int j = 0; j < uniforms.numRectangularLightSamples; j++)
+        {
+            float2 randomEpsilon = rng.next_2d();
+            LightSample lightSample = uniforms.rectangularLightBuf[i].sample(hitPoint, randomEpsilon);
+            float3 irradiance = lightSample.radiance / lightSample.pdf;
+            float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
+            float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
+            accumulatedContribution += atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
+            validSamples++;
+        }
+
+        if (validSamples > 0)
+        {
+            outgoingRadiance += accumulatedContribution / validSamples;
+        }
+    }
+
+    return outgoingRadiance;
+}
+
+public AtmosphereMarchResult marchAtmosphere(
+    PhysicsBasedParameters parameters,
+    RendererUniform uniforms,
+    float3 rayOrigin,
+    float3 rayDirection,
+    float tStart,
+    float tEnd)
+{
+    const uint VIEW_STEPS = 32;
+    AtmosphereBRDF brdf = makeAtmosphereBRDF(parameters);
+    float3 sphereCenter = parameters.atmosphereCenter;
+    if (tEnd <= tStart)
+    {
+        return AtmosphereMarchResult(float3(0.0), float3(1.0));
+    }
+
+    float shellThickness = max(brdf.getShellThickness(), 1e-4);
+    float segmentLength = tEnd - tStart;
+    float stepLength = segmentLength / VIEW_STEPS;
+    float3 transmittance = float3(1.0);
+    float3 inscatteredRadiance = float3(0.0);
+    float3 viewDirection = -normalize(rayDirection);
+
+    [MaxIters(VIEW_STEPS)]
+    for (uint i = 0; i < VIEW_STEPS; ++i)
+    {
+        float t = tStart + (float(i) + 0.5) * stepLength;
+        float3 samplePoint = rayOrigin + rayDirection * t;
+        float density = getAtmosphereDensity(brdf, sphereCenter, samplePoint);
+        if (density <= 1e-5)
+        {
+            continue;
+        }
+
+        float normalizedStep = density * (stepLength / shellThickness);
+        float3 stepScattering = float3(0.0);
+
+        if (uniforms.pointLightCount == 0 && uniforms.directionalLightCount == 0 && uniforms.rectangularLightCount == 0)
+        {
+            LightSample lightSample = FlashLight().sample(viewDirection);
+            float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection, lightSample.lightDistance);
+            float phase = brdf.getPhaseValue(dot(viewDirection, normalize(lightSample.lightDirection)));
+            stepScattering += brdf.scatteringColor * brdf.scatteringStrength * normalizedStep * phase * lightTransmittance * lightSample.radiance;
+        }
+
+        for (int lightIdx = 0; lightIdx < uniforms.pointLightCount; ++lightIdx)
+        {
+            LightSample lightSample = uniforms.pointLightBuf[lightIdx].sample(samplePoint);
+            float distanceFalloff = max(lightSample.lightDistance * lightSample.lightDistance, 1e-4);
+            float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection, lightSample.lightDistance);
+            float phase = brdf.getPhaseValue(dot(viewDirection, normalize(lightSample.lightDirection)));
+            stepScattering += brdf.scatteringColor * brdf.scatteringStrength * normalizedStep * phase * lightTransmittance * (lightSample.radiance / distanceFalloff);
+        }
+
+        for (int lightIdx = 0; lightIdx < uniforms.directionalLightCount; ++lightIdx)
+        {
+            LightSample lightSample = uniforms.directionalLightBuf[lightIdx].sample();
+            float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection);
+            float phase = brdf.getPhaseValue(dot(viewDirection, normalize(lightSample.lightDirection)));
+            stepScattering += brdf.scatteringColor * brdf.scatteringStrength * normalizedStep * phase * lightTransmittance * lightSample.radiance;
+        }
+
+        for (int lightIdx = 0; lightIdx < uniforms.rectangularLightCount; ++lightIdx)
+        {
+            float3 accumulatedRectangular = float3(0.0);
+            int validSamples = 0;
+            for (int sampleIdx = 0; sampleIdx < uniforms.numRectangularLightSamples; ++sampleIdx)
+            {
+                float2 epsilon = float2(
+                    frac(sin(float(i * 37 + sampleIdx * 17 + lightIdx * 13) * 12.9898) * 43758.5453),
+                    frac(sin(float(i * 53 + sampleIdx * 23 + lightIdx * 19) * 78.233) * 24634.6345)
+                );
+                LightSample lightSample = uniforms.rectangularLightBuf[lightIdx].sample(samplePoint, epsilon);
+                float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection, lightSample.lightDistance);
+                float phase = brdf.getPhaseValue(dot(viewDirection, normalize(lightSample.lightDirection)));
+                accumulatedRectangular += brdf.scatteringColor * brdf.scatteringStrength * normalizedStep * phase * lightTransmittance * (lightSample.radiance / max(lightSample.pdf, 1e-4));
+                validSamples++;
+            }
+
+            if (validSamples > 0)
+            {
+                stepScattering += accumulatedRectangular / validSamples;
+            }
+        }
+
+        inscatteredRadiance += transmittance * stepScattering;
+        transmittance *= exp(-brdf.absorptionColor * normalizedStep);
+    }
+
+    return AtmosphereMarchResult(inscatteredRadiance, transmittance);
+}
+
 public float3 getDirectIllumination(PhysicsBasedParameters parameters, RendererUniform uniforms, float3 rayOut, float3 normal, float3 hitPoint, inout RNG rng)
 {
     float3 outgoingRadiance = float3(0.0);
     float3 fr = float3(0.0);
     bool lambertianScattering = false; // True only for Lambertian BRDF and Retroreflective Lambertian BRDF
     float3 retroreflectiveLambertianFr = float3(0.0);
+    bool isAtmosphere = false;
 
     if (parameters.brdfType == 0)
     {
@@ -223,23 +472,17 @@ public float3 getDirectIllumination(PhysicsBasedParameters parameters, RendererU
     }
     else if (parameters.brdfType == 5)
     {
-        AtmosphereBRDF brdf = AtmosphereBRDF(
-            parameters.albedo,
-            parameters.atmosphereScatteringColor,
-            parameters.atmosphereAbsorptionColor,
-            parameters.atmosphereDensityFalloff,
-            parameters.atmosphereScatteringStrength,
-            parameters.atmospherePhaseG,
-            parameters.atmospherePlanetRadius,
-            parameters.atmosphereRadius
-        );
-        fr = brdf.evaluate(rayOut, normal);
-        lambertianScattering = true;
+        isAtmosphere = true;
     }
 
     // If there are no light sources, we simply use the flash light source.
     if (uniforms.pointLightCount == 0 && uniforms.directionalLightCount == 0 && uniforms.rectangularLightCount == 0)
     {
+        if (isAtmosphere)
+        {
+            return getAtmosphereDirectIllumination(parameters, uniforms, rayOut, normal, hitPoint, rng);
+        }
+
         // For the combination of Retroreflective (Lambertian or not) BRDF and Flash light,
         if (parameters.brdfType == 3 || parameters.brdfType == 4)
         {
@@ -250,6 +493,11 @@ public float3 getDirectIllumination(PhysicsBasedParameters parameters, RendererU
     }
     else
     {
+        if (isAtmosphere)
+        {
+            return getAtmosphereDirectIllumination(parameters, uniforms, rayOut, normal, hitPoint, rng);
+        }
+
         float3 pointLightContribution = evaluatePointLightContribution(uniforms.pointLightBuf, uniforms.pointLightCount, hitPoint, fr, normal, uniforms, lambertianScattering);
         float3 directionalLightContribution = evaluateDirectionalLightContribution(uniforms.directionalLightBuf, uniforms.directionalLightCount, hitPoint, fr, normal, uniforms, lambertianScattering);
         float3 rectangularLightContribution = evaluateRectangularLightContribution(uniforms.rectangularLightBuf, uniforms.rectangularLightCount, hitPoint, fr, normal, uniforms, rng, lambertianScattering);
@@ -361,10 +609,10 @@ public SampleBRDFResult sampleBRDF(PhysicsBasedParameters parameters, float3 ray
             parameters.atmosphereScatteringStrength,
             parameters.atmospherePhaseG,
             parameters.atmospherePlanetRadius,
-            parameters.atmosphereRadius
+            parameters.atmospherePlanetRadius + parameters.atmosphereThickness
         );
-        fr = brdf.evaluate(rayOut, normal);
         sampledDirection = brdf.sample(rayOut, normal);
+        fr = brdf.evaluate(rayOut, normal, sampledDirection);
         sampledPdf = brdf.pdf(sampledDirection, rayOut, normal);
     }
 

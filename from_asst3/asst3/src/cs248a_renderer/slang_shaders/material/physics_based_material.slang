@@ -17,13 +17,15 @@ public struct PhysicsBasedParameters
     public float smoothness;
     public uint brdfType;
     public float ior;     // Index of Refraction
+    public uint atmosphereEnabled;
     public float3 atmosphereScatteringColor;
     public float3 atmosphereAbsorptionColor;
     public float atmosphereDensityFalloff;
     public float atmosphereScatteringStrength;
     public float atmospherePhaseG;
     public float atmospherePlanetRadius;
-    public float atmosphereRadius;
+    public float atmosphereThickness;
+    public float3 atmosphereCenter;
 }
 
 public struct PhysicsBasedMaterial
@@ -32,13 +34,15 @@ public struct PhysicsBasedMaterial
     public float smoothness;
     public uint brdfType;
     public float ior;     // Index of Refraction
+    public uint atmosphereEnabled;
     public float3 atmosphereScatteringColor;
     public float3 atmosphereAbsorptionColor;
     public float atmosphereDensityFalloff;
     public float atmosphereScatteringStrength;
     public float atmospherePhaseG;
     public float atmospherePlanetRadius;
-    public float atmosphereRadius;
+    public float atmosphereThickness;
+    public float3 atmosphereCenter;
 }
 
 public struct PhysicsBasedMaterialTextureBuf
@@ -54,13 +58,15 @@ public PhysicsBasedParameters sampleMaterial(PhysicsBasedMaterial material)
     params.smoothness = material.smoothness;
     params.brdfType = material.brdfType;
     params.ior = material.ior;
+    params.atmosphereEnabled = material.atmosphereEnabled;
     params.atmosphereScatteringColor = material.atmosphereScatteringColor;
     params.atmosphereAbsorptionColor = material.atmosphereAbsorptionColor;
     params.atmosphereDensityFalloff = material.atmosphereDensityFalloff;
     params.atmosphereScatteringStrength = material.atmosphereScatteringStrength;
     params.atmospherePhaseG = material.atmospherePhaseG;
     params.atmospherePlanetRadius = material.atmospherePlanetRadius;
-    params.atmosphereRadius = material.atmosphereRadius;
+    params.atmosphereThickness = material.atmosphereThickness;
+    params.atmosphereCenter = material.atmosphereCenter;
     return params;
 }
 
@@ -122,13 +128,15 @@ public PhysicsBasedParameters sampleMaterial(
         params.albedo = color;
         params.smoothness = 0.0;
         params.ior = material.ior;
+        params.atmosphereEnabled = material.atmosphereEnabled;
         params.atmosphereScatteringColor = material.atmosphereScatteringColor;
         params.atmosphereAbsorptionColor = material.atmosphereAbsorptionColor;
         params.atmosphereDensityFalloff = material.atmosphereDensityFalloff;
         params.atmosphereScatteringStrength = material.atmosphereScatteringStrength;
         params.atmospherePhaseG = material.atmospherePhaseG;
         params.atmospherePlanetRadius = material.atmospherePlanetRadius;
-        params.atmosphereRadius = material.atmosphereRadius;
+        params.atmosphereThickness = material.atmosphereThickness;
+        params.atmosphereCenter = material.atmosphereCenter;
         params.brdfType = 4; // Retroreflective Lambertian BRDF
         return params;
     }
@@ -160,12 +168,14 @@ public PhysicsBasedParameters sampleMaterial(
     params.smoothness = material.smoothness;
     params.brdfType = material.brdfType;
     params.ior = material.ior;
+    params.atmosphereEnabled = material.atmosphereEnabled;
     params.atmosphereScatteringColor = material.atmosphereScatteringColor;
     params.atmosphereAbsorptionColor = material.atmosphereAbsorptionColor;
     params.atmosphereDensityFalloff = material.atmosphereDensityFalloff;
     params.atmosphereScatteringStrength = material.atmosphereScatteringStrength;
     params.atmospherePhaseG = material.atmospherePhaseG;
     params.atmospherePlanetRadius = material.atmospherePlanetRadius;
-    params.atmosphereRadius = material.atmosphereRadius;
+    params.atmosphereThickness = material.atmosphereThickness;
+    params.atmosphereCenter = material.atmosphereCenter;
     return params;
 }

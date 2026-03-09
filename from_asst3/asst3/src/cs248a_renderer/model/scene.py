@@ -165,11 +165,15 @@ class Scene:
                 continue
             if type(current) is Mesh:
                 transform = current.get_transform_matrix()
+                bbox = current.bounding_box
+                local_center = (bbox.min + bbox.max) * 0.5
+                world_center = glm.vec3(transform * glm.vec4(local_center, 1.0))
                 for triangle in current.triangles:
                     triangle = replace(triangle, material_id=len(self._materials))
                     transformed_triangle = triangle.transform(transform)
                     self._triangles.append(transformed_triangle)
-                self._materials.append(current.material)
+                material = replace(current.material, atmosphere_center=world_center)
+                self._materials.append(material)
             stack.extend(current.children)
         return self._triangles, self._materials
 

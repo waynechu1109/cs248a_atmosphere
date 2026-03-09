@@ -326,16 +326,28 @@ class SceneEditorWindow(Window):
         imgui.separator_text(f"Material##{name}")
         material = mesh.material
 
+        if material.brdf_type == BRDFType.ATMOSPHERE:
+            material.brdf_type = BRDFType.LAMBERTIAN
+            material.atmosphere_enabled = True
+            self._mesh_outdated.on_next(True)
+
         # Render BRDF type selector
-        brdf_types = [brdf.name for brdf in BRDFType]
-        current_brdf = material.brdf_type.value
+        brdf_options = [
+            BRDFType.LAMBERTIAN,
+            BRDFType.MIRROR,
+            BRDFType.GLASS,
+            BRDFType.RETROREFLECTIVE,
+            BRDFType.RETROREFLECTIVE_LAMBERTIAN,
+        ]
+        brdf_types = [brdf.name for brdf in brdf_options]
+        current_brdf = brdf_options.index(material.brdf_type)
         changed, selected_brdf = imgui.combo(
             f"BRDF Type##{name}",
             current_brdf,
             brdf_types,
         )
         if changed:
-            material.brdf_type = BRDFType(selected_brdf)
+            material.brdf_type = brdf_options[selected_brdf]
             self._mesh_outdated.on_next(True)
 
         # Render albedo field
@@ -365,13 +377,23 @@ class SceneEditorWindow(Window):
                 material.ior = ior
                 self._mesh_outdated.on_next(True)
 
-        if material.brdf_type == BRDFType.ATMOSPHERE:
-            self._render_atmosphere_material(material, name)
+        self._render_atmosphere_material(material, name)
 
     def _render_atmosphere_material(
         self, material: PhysicsBasedMaterial, name: str = ""
     ) -> None:
         imgui.separator_text(f"Atmosphere##{name}")
+
+        changed, atmosphere_enabled = imgui.checkbox(
+            f"Enable Atmosphere##{name}",
+            material.atmosphere_enabled,
+        )
+        if changed:
+            material.atmosphere_enabled = atmosphere_enabled
+            self._mesh_outdated.on_next(True)
+
+        if not material.atmosphere_enabled:
+            return
 
         changed, color = imgui.color_edit3(
             f"Scattering Color##{name}",
@@ -439,24 +461,17 @@ class SceneEditorWindow(Window):
         )
         if changed:
             material.atmosphere_planet_radius = planet_radius
-            material.atmosphere_radius = max(
-                material.atmosphere_radius,
-                material.atmosphere_planet_radius,
-            )
             self._mesh_outdated.on_next(True)
 
-        changed, atmosphere_radius = imgui.drag_float(
-            f"Atmosphere Radius##{name}",
-            material.atmosphere_radius,
+        changed, atmosphere_thickness = imgui.drag_float(
+            f"Atmosphere Thickness##{name}",
+            material.atmosphere_thickness,
             v_speed=0.01,
-            v_min=material.atmosphere_planet_radius,
+            v_min=0.0,
             v_max=100.0,
         )
         if changed:
-            material.atmosphere_radius = max(
-                atmosphere_radius,
-                material.atmosphere_planet_radius,
-            )
+            material.atmosphere_thickness = max(atmosphere_thickness, 0.0)
             self._mesh_outdated.on_next(True)
 
     def _render_material_field(
