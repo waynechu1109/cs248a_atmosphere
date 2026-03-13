@@ -266,6 +266,112 @@ public float2 getAtmosphereDensities(AtmosphereBRDF brdf, float3 sphereCenter, f
     );
 }
 
+public float3 getStablePerpendicular(float3 direction)
+{
+    float3 axis = abs(direction.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+    return normalize(cross(direction, axis));
+}
+
+public float2 integrateAtmosphereOpticalDepth(
+    AtmosphereBRDF brdf,
+    float3 sphereCenter,
+    float3 rayOrigin,
+    float3 rayDirection,
+    float tStart,
+    float tEnd,
+    uint stepCount)
+{
+    if (tEnd <= tStart || stepCount == 0)
+    {
+        return float2(0.0);
+    }
+
+    float shellThickness = max(brdf.getShellThickness(), 1e-4);
+    float stepLength = (tEnd - tStart) / stepCount;
+    float rayleighOpticalDepth = 0.0;
+    float mieOpticalDepth = 0.0;
+
+    for (uint i = 0; i < stepCount; ++i)
+    {
+        float t = tStart + (float(i) + 0.5) * stepLength;
+        float3 position = rayOrigin + rayDirection * t;
+        float2 densities = getAtmosphereDensities(brdf, sphereCenter, position);
+        rayleighOpticalDepth += densities.x * (stepLength / shellThickness);
+        mieOpticalDepth += densities.y * (stepLength / shellThickness);
+    }
+
+    return float2(rayleighOpticalDepth, mieOpticalDepth);
+}
+
+public float3 getApproximateRefractedLightTransmittance(
+    AtmosphereBRDF brdf,
+    float3 sphereCenter,
+    float3 samplePoint,
+    float3 lightDirection,
+    float maxDistance = float.maxValue)
+{
+    const uint REFRACTION_STEPS = 16;
+    float3 direction = normalize(lightDirection);
+    float3 rayStart = samplePoint + direction * 1e-3;
+    float3 toCenter = sphereCenter - rayStart;
+    float projectedDistance = dot(toCenter, direction);
+    if (projectedDistance <= 0.0 || projectedDistance >= maxDistance)
+    {
+        return float3(0.0);
+    }
+
+    float3 closestPoint = rayStart + direction * projectedDistance;
+    float3 radialOffset = closestPoint - sphereCenter;
+    float impactParameter = length(radialOffset);
+    if (impactParameter >= brdf.planetRadius || impactParameter >= brdf.atmosphereRadius)
+    {
+        return float3(0.0);
+    }
+
+    float shellThickness = max(brdf.getShellThickness(), 1e-4);
+    float maxRefractionReach = shellThickness * 0.6;
+    float shadowPenetration = brdf.planetRadius - impactParameter;
+    if (shadowPenetration >= maxRefractionReach)
+    {
+        return float3(0.0);
+    }
+
+    float refractedVisibility = 1.0 - saturate(shadowPenetration / max(maxRefractionReach, 1e-4));
+    float effectiveAltitude = clamp(
+        0.02 * shellThickness + shadowPenetration * 1.5,
+        0.02 * shellThickness,
+        0.5 * shellThickness
+    );
+    float effectiveImpact = clamp(
+        brdf.planetRadius + effectiveAltitude,
+        brdf.planetRadius + 1e-4,
+        brdf.atmosphereRadius - 1e-4
+    );
+
+    float3 radialDirection = length(radialOffset) > 1e-4 ? normalize(radialOffset) : getStablePerpendicular(direction);
+    float3 tangentPoint = sphereCenter + radialDirection * effectiveImpact;
+    float halfChordLength = sqrt(max(brdf.atmosphereRadius * brdf.atmosphereRadius - effectiveImpact * effectiveImpact, 0.0));
+    if (halfChordLength <= 1e-4)
+    {
+        return float3(0.0);
+    }
+
+    float3 virtualRayOrigin = tangentPoint - direction * halfChordLength;
+    float2 opticalDepth = integrateAtmosphereOpticalDepth(
+        brdf,
+        sphereCenter,
+        virtualRayOrigin,
+        direction,
+        0.0,
+        2.0 * halfChordLength,
+        REFRACTION_STEPS
+    );
+
+    float3 transmittance = exp(-brdf.getExtinctionCoefficient(opticalDepth.x, opticalDepth.y));
+    float refractedIntensity = 0.18 * refractedVisibility * refractedVisibility;
+    return transmittance * refractedIntensity;
+}
+
 public bool isPlanetOccludingLight(float3 samplePoint, float3 lightDirection, float3 sphereCenter, float planetRadius, float maxDistance = float.maxValue)
 {
     float2 hitRange = intersectSphere(samplePoint + normalize(lightDirection) * 1e-3, normalize(lightDirection), sphereCenter, planetRadius);
@@ -283,7 +389,7 @@ public float3 getAtmosphereLightTransmittance(
     float3 direction = normalize(lightDirection);
     if (isPlanetOccludingLight(samplePoint, direction, sphereCenter, brdf.planetRadius, maxDistance))
     {
-        return float3(0.0);
+        return getApproximateRefractedLightTransmittance(brdf, sphereCenter, samplePoint, direction, maxDistance);
     }
 
     float2 shellRange = intersectSphere(samplePoint + direction * 1e-3, direction, sphereCenter, brdf.atmosphereRadius);
@@ -294,26 +400,20 @@ public float3 getAtmosphereLightTransmittance(
         return float3(1.0);
     }
 
-    float shellThickness = max(brdf.getShellThickness(), 1e-4);
-    float segmentLength = tEnd - tStart;
-    float stepLength = segmentLength / LIGHT_STEPS;
-    float rayleighOpticalDepth = 0.0;
-    float mieOpticalDepth = 0.0;
+    float2 opticalDepth = integrateAtmosphereOpticalDepth(
+        brdf,
+        sphereCenter,
+        samplePoint,
+        direction,
+        tStart,
+        tEnd,
+        LIGHT_STEPS
+    );
 
-    [MaxIters(LIGHT_STEPS)]
-    for (uint i = 0; i < LIGHT_STEPS; ++i)
-    {
-        float t = tStart + (float(i) + 0.5) * stepLength;
-        float3 position = samplePoint + direction * t;
-        float2 densities = getAtmosphereDensities(brdf, sphereCenter, position);
-        rayleighOpticalDepth += densities.x * (stepLength / shellThickness);
-        mieOpticalDepth += densities.y * (stepLength / shellThickness);
-    }
-
-    return exp(-brdf.getExtinctionCoefficient(rayleighOpticalDepth, mieOpticalDepth));
+    return exp(-brdf.getExtinctionCoefficient(opticalDepth.x, opticalDepth.y));
 }
 
-public FilteredLightResult filterLightThroughAtmospheres(float3 hitPoint, float3 lightDirection, float lightDistance, RendererUniform uniforms)
+public FilteredLightResult filterLightThroughAtmospheres(float3 hitPoint, float3 lightDirection, float lightDistance, RendererUniform uniforms, uint excludedMaterialId = 0xffffffff)
 {
     FilteredLightResult result = FilteredLightResult(float3(1.0), false);
     float3 direction = normalize(lightDirection);
@@ -321,6 +421,10 @@ public FilteredLightResult filterLightThroughAtmospheres(float3 hitPoint, float3
 
     for (uint materialId = 0; materialId < uniforms.materialCount; ++materialId)
     {
+        if (materialId == excludedMaterialId)
+        {
+            continue;
+        }
         PhysicsBasedMaterial material = uniforms.physicsBasedMaterialBuf[materialId];
         if (material.atmosphereEnabled == 0 || material.atmosphereThickness <= 0.0)
         {
@@ -332,22 +436,6 @@ public FilteredLightResult filterLightThroughAtmospheres(float3 hitPoint, float3
         float2 atmosphereRange = intersectSphere(hitPoint + direction * 1e-3, direction, sphereCenter, outerRadius);
         float tEntry = max(atmosphereRange.x, 0.0);
         float tExit = min(atmosphereRange.y, maxDistance);
-        if (tExit <= tEntry)
-        {
-            continue;
-        }
-
-        float2 planetRange = intersectSphere(hitPoint + direction * 1e-3, direction, sphereCenter, material.atmospherePlanetRadius);
-        if (planetRange.y > 0.0 && planetRange.x < maxDistance)
-        {
-            float planetEntry = max(planetRange.x, 0.0);
-            if (planetEntry <= tEntry + 1e-3)
-            {
-                return FilteredLightResult(float3(0.0), true);
-            }
-            tExit = min(tExit, planetEntry);
-        }
-
         if (tExit <= tEntry)
         {
             continue;
@@ -367,23 +455,40 @@ public FilteredLightResult filterLightThroughAtmospheres(float3 hitPoint, float3
             outerRadius
         );
 
-        const uint LIGHT_FILTER_STEPS = 12;
-        float shellThickness = max(brdf.getShellThickness(), 1e-4);
-        float stepLength = (tExit - tEntry) / LIGHT_FILTER_STEPS;
-        float rayleighOpticalDepth = 0.0;
-        float mieOpticalDepth = 0.0;
-
-        [MaxIters(LIGHT_FILTER_STEPS)]
-        for (uint stepIdx = 0; stepIdx < LIGHT_FILTER_STEPS; ++stepIdx)
+        float2 planetRange = intersectSphere(hitPoint + direction * 1e-3, direction, sphereCenter, material.atmospherePlanetRadius);
+        if (planetRange.y > 0.0 && planetRange.x < maxDistance)
         {
-            float t = tEntry + (float(stepIdx) + 0.5) * stepLength;
-            float3 samplePoint = hitPoint + direction * t;
-            float2 densities = getAtmosphereDensities(brdf, sphereCenter, samplePoint);
-            rayleighOpticalDepth += densities.x * (stepLength / shellThickness);
-            mieOpticalDepth += densities.y * (stepLength / shellThickness);
+            float3 refractedTransmittance = getApproximateRefractedLightTransmittance(
+                brdf,
+                sphereCenter,
+                hitPoint,
+                direction,
+                maxDistance
+            );
+            if (max(max(refractedTransmittance.x, refractedTransmittance.y), refractedTransmittance.z) <= 1e-4)
+            {
+                return FilteredLightResult(float3(0.0), true);
+            }
+            result.transmittance *= refractedTransmittance;
+            continue;
         }
 
-        result.transmittance *= exp(-brdf.getExtinctionCoefficient(rayleighOpticalDepth, mieOpticalDepth));
+        if (tExit <= tEntry)
+        {
+            continue;
+        }
+        const uint LIGHT_FILTER_STEPS = 12;
+        float2 opticalDepth = integrateAtmosphereOpticalDepth(
+            brdf,
+            sphereCenter,
+            hitPoint,
+            direction,
+            tEntry,
+            tExit,
+            LIGHT_FILTER_STEPS
+        );
+
+        result.transmittance *= exp(-brdf.getExtinctionCoefficient(opticalDepth.x, opticalDepth.y));
     }
 
     return result;
@@ -425,8 +530,23 @@ public float3 getAtmosphereDirectIllumination(PhysicsBasedParameters parameters,
     for (int i = 0; i < uniforms.pointLightCount; i++)
     {
         LightSample lightSample = uniforms.pointLightBuf[i].sample(hitPoint);
+        bool occluded = isLightOccluded(lightSample, hitPoint, uniforms);
+        if (occluded)
+        {
+            continue;
+        }
+        FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+            hitPoint,
+            lightSample.lightDirection,
+            lightSample.lightDistance,
+            uniforms
+        );
+        if (filteredLight.occluded)
+        {
+            continue;
+        }
         float fallOffFactor = lightSample.lightDistance * lightSample.lightDistance;
-        float3 irradiance = lightSample.radiance / ((fallOffFactor + EPSILON) * lightSample.pdf);
+        float3 irradiance = (lightSample.radiance / ((fallOffFactor + EPSILON) * lightSample.pdf)) * filteredLight.transmittance;
         float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
         float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
         outgoingRadiance += atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
@@ -435,7 +555,22 @@ public float3 getAtmosphereDirectIllumination(PhysicsBasedParameters parameters,
     for (int i = 0; i < uniforms.directionalLightCount; i++)
     {
         LightSample lightSample = uniforms.directionalLightBuf[i].sample();
-        float3 irradiance = lightSample.radiance / lightSample.pdf;
+        bool occluded = isLightOccluded(lightSample, hitPoint, uniforms);
+        if (occluded)
+        {
+            continue;
+        }
+        FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+            hitPoint,
+            lightSample.lightDirection,
+            lightSample.lightDistance,
+            uniforms
+        );
+        if (filteredLight.occluded)
+        {
+            continue;
+        }
+        float3 irradiance = (lightSample.radiance / lightSample.pdf) * filteredLight.transmittance;
         float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
         float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
         outgoingRadiance += atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
@@ -450,7 +585,22 @@ public float3 getAtmosphereDirectIllumination(PhysicsBasedParameters parameters,
         {
             float2 randomEpsilon = rng.next_2d();
             LightSample lightSample = uniforms.rectangularLightBuf[i].sample(hitPoint, randomEpsilon);
-            float3 irradiance = lightSample.radiance / lightSample.pdf;
+            bool occluded = isLightOccluded(lightSample, hitPoint, uniforms);
+            if (occluded)
+            {
+                continue;
+            }
+            FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+                hitPoint,
+                lightSample.lightDirection,
+                lightSample.lightDistance,
+                uniforms
+            );
+            if (filteredLight.occluded)
+            {
+                continue;
+            }
+            float3 irradiance = (lightSample.radiance / lightSample.pdf) * filteredLight.transmittance;
             float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
             float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
             accumulatedContribution += atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
@@ -467,6 +617,7 @@ public float3 getAtmosphereDirectIllumination(PhysicsBasedParameters parameters,
 }
 
 public AtmosphereMarchResult marchAtmosphere(
+    uint materialId,
     PhysicsBasedParameters parameters,
     RendererUniform uniforms,
     float3 rayOrigin,
@@ -502,32 +653,91 @@ public AtmosphereMarchResult marchAtmosphere(
 
         float rayleighStep = densities.x * (stepLength / shellThickness);
         float mieStep = densities.y * (stepLength / shellThickness);
-        float normalizedStep = 0.5 * (rayleighStep + mieStep);
         float3 stepScattering = float3(0.0);
 
         if (uniforms.pointLightCount == 0 && uniforms.directionalLightCount == 0 && uniforms.rectangularLightCount == 0)
         {
             LightSample lightSample = FlashLight().sample(viewDirection);
+            bool occluded = isLightOccluded(lightSample, samplePoint, uniforms);
+            if (occluded)
+            {
+                continue;
+            }
+            FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+                samplePoint,
+                lightSample.lightDirection,
+                lightSample.lightDistance,
+                uniforms,
+                materialId
+            );
+            if (filteredLight.occluded)
+            {
+                continue;
+            }
             float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection, lightSample.lightDistance);
-            float3 scatteringCoefficient = brdf.getScatteringCoefficient(dot(viewDirection, normalize(lightSample.lightDirection)));
-            stepScattering += scatteringCoefficient * normalizedStep * lightTransmittance * lightSample.radiance;
+            float3 scatteringCoefficient = brdf.getScatteringCoefficient(
+                dot(viewDirection, normalize(lightSample.lightDirection)),
+                rayleighStep,
+                mieStep
+            );
+            stepScattering += scatteringCoefficient * lightTransmittance * filteredLight.transmittance * lightSample.radiance;
         }
 
         for (int lightIdx = 0; lightIdx < uniforms.pointLightCount; ++lightIdx)
         {
             LightSample lightSample = uniforms.pointLightBuf[lightIdx].sample(samplePoint);
+            bool occluded = isLightOccluded(lightSample, samplePoint, uniforms);
+            if (occluded)
+            {
+                continue;
+            }
+            FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+                samplePoint,
+                lightSample.lightDirection,
+                lightSample.lightDistance,
+                uniforms,
+                materialId
+            );
+            if (filteredLight.occluded)
+            {
+                continue;
+            }
             float distanceFalloff = max(lightSample.lightDistance * lightSample.lightDistance, 1e-4);
             float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection, lightSample.lightDistance);
-            float3 scatteringCoefficient = brdf.getScatteringCoefficient(dot(viewDirection, normalize(lightSample.lightDirection)));
-            stepScattering += scatteringCoefficient * normalizedStep * lightTransmittance * (lightSample.radiance / distanceFalloff);
+            float3 scatteringCoefficient = brdf.getScatteringCoefficient(
+                dot(viewDirection, normalize(lightSample.lightDirection)),
+                rayleighStep,
+                mieStep
+            );
+            stepScattering += scatteringCoefficient * lightTransmittance * filteredLight.transmittance * (lightSample.radiance / distanceFalloff);
         }
 
         for (int lightIdx = 0; lightIdx < uniforms.directionalLightCount; ++lightIdx)
         {
             LightSample lightSample = uniforms.directionalLightBuf[lightIdx].sample();
+            bool occluded = isLightOccluded(lightSample, samplePoint, uniforms);
+            if (occluded)
+            {
+                continue;
+            }
+            FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+                samplePoint,
+                lightSample.lightDirection,
+                lightSample.lightDistance,
+                uniforms,
+                materialId
+            );
+            if (filteredLight.occluded)
+            {
+                continue;
+            }
             float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection);
-            float3 scatteringCoefficient = brdf.getScatteringCoefficient(dot(viewDirection, normalize(lightSample.lightDirection)));
-            stepScattering += scatteringCoefficient * normalizedStep * lightTransmittance * lightSample.radiance;
+            float3 scatteringCoefficient = brdf.getScatteringCoefficient(
+                dot(viewDirection, normalize(lightSample.lightDirection)),
+                rayleighStep,
+                mieStep
+            );
+            stepScattering += scatteringCoefficient * lightTransmittance * filteredLight.transmittance * lightSample.radiance;
         }
 
         for (int lightIdx = 0; lightIdx < uniforms.rectangularLightCount; ++lightIdx)
@@ -541,9 +751,29 @@ public AtmosphereMarchResult marchAtmosphere(
                     frac(sin(float(i * 53 + sampleIdx * 23 + lightIdx * 19) * 78.233) * 24634.6345)
                 );
                 LightSample lightSample = uniforms.rectangularLightBuf[lightIdx].sample(samplePoint, epsilon);
+                bool occluded = isLightOccluded(lightSample, samplePoint, uniforms);
+                if (occluded)
+                {
+                    continue;
+                }
+                FilteredLightResult filteredLight = filterLightThroughAtmospheres(
+                    samplePoint,
+                    lightSample.lightDirection,
+                    lightSample.lightDistance,
+                    uniforms,
+                    materialId
+                );
+                if (filteredLight.occluded)
+                {
+                    continue;
+                }
                 float3 lightTransmittance = getAtmosphereLightTransmittance(brdf, sphereCenter, samplePoint, lightSample.lightDirection, lightSample.lightDistance);
-                float3 scatteringCoefficient = brdf.getScatteringCoefficient(dot(viewDirection, normalize(lightSample.lightDirection)));
-                accumulatedRectangular += scatteringCoefficient * normalizedStep * lightTransmittance * (lightSample.radiance / max(lightSample.pdf, 1e-4));
+                float3 scatteringCoefficient = brdf.getScatteringCoefficient(
+                    dot(viewDirection, normalize(lightSample.lightDirection)),
+                    rayleighStep,
+                    mieStep
+                );
+                accumulatedRectangular += scatteringCoefficient * lightTransmittance * filteredLight.transmittance * (lightSample.radiance / max(lightSample.pdf, 1e-4));
                 validSamples++;
             }
 

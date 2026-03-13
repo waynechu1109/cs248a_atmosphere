@@ -54,6 +54,14 @@ public struct AtmosphereBRDF
             mieScatteringColor * mieStrength * mie;
     }
 
+    public float3 getScatteringCoefficient(float cosTheta, float rayleighDensity, float mieDensity)
+    {
+        float rayleigh = getRayleighPhase(cosTheta);
+        float mie = getMiePhase(cosTheta);
+        return rayleighScatteringColor * rayleighStrength * rayleigh * rayleighDensity +
+            mieScatteringColor * mieStrength * mie * mieDensity;
+    }
+
     public float getRayleighDensity(float normalizedHeight)
     {
         return exp(-normalizedHeight * max(rayleighDensityFalloff, 0.0));
@@ -61,12 +69,15 @@ public struct AtmosphereBRDF
 
     public float getMieDensity(float normalizedHeight)
     {
-        return exp(-normalizedHeight * max(mieDensityFalloff, 0.0));
+        float baseDensity = exp(-normalizedHeight * max(mieDensityFalloff, 0.0));
+        float groundWeight = pow(saturate(1.0 - normalizedHeight), 3.0);
+        return baseDensity * groundWeight;
     }
 
     public float3 getExtinctionCoefficient(float rayleighDensity, float mieDensity)
     {
-        return absorptionColor +
+        float mediumDensity = max(rayleighDensity, mieDensity);
+        return absorptionColor * mediumDensity +
             rayleighScatteringColor * rayleighStrength * rayleighDensity +
             mieScatteringColor * mieStrength * mieDensity;
     }
@@ -105,7 +116,7 @@ public struct AtmosphereBRDF
         float scatterAmount = 1.0 - exp(-combinedOpticalDepth);
 
         float3 lightTransmittance = exp(-getExtinctionCoefficient(1.0, 1.0) * lightOpticalDepth);
-        float3 inScatteredLight = getScatteringCoefficient(dot(wo, wi)) * scatterAmount * lightTransmittance;
+        float3 inScatteredLight = getScatteringCoefficient(dot(wo, wi), 1.0, 1.0) * scatterAmount * lightTransmittance;
 
         return inScatteredLight;
     }

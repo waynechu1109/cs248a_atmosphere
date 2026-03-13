@@ -83,12 +83,25 @@ public Optional<RayMeshSampleResult> meshSample(float2 uv, RendererUniform unifo
                 nearestSceneT = min(nearestSceneT, rayMeshIntersectionResult.value.closestHit.t);
             }
 
-            Optional<AtmosphereHitResult> atmosphereHitResult = rayAtmosphereIntersection(ray, uniforms, nearestSceneT);
-            if (atmosphereHitResult.hasValue)
+            float atmosphereSearchStart = ray.tRange.x;
+            while (atmosphereSearchStart < nearestSceneT)
             {
+                Ray atmosphereRay = ray;
+                atmosphereRay.tRange.x = atmosphereSearchStart;
+                Optional<AtmosphereHitResult> atmosphereHitResult = rayAtmosphereIntersection(
+                    atmosphereRay,
+                    uniforms,
+                    nearestSceneT
+                );
+                if (!atmosphereHitResult.hasValue)
+                {
+                    break;
+                }
+
                 PhysicsBasedMaterial atmosphereMaterial = uniforms.physicsBasedMaterialBuf[atmosphereHitResult.value.materialId];
                 PhysicsBasedParameters atmosphereParameters = sampleMaterial(atmosphereMaterial);
                 AtmosphereMarchResult atmosphereResult = marchAtmosphere(
+                    atmosphereHitResult.value.materialId,
                     atmosphereParameters,
                     uniforms,
                     ray.origin,
@@ -105,6 +118,19 @@ public Optional<RayMeshSampleResult> meshSample(float2 uv, RendererUniform unifo
                     float3 atmosphereHitPoint = ray.origin + t * ray.direction;
                     normalAtFirstHit = normalize(atmosphereHitPoint - atmosphereMaterial.atmosphereCenter);
                 }
+
+                if (max(throughput.x, max(throughput.y, throughput.z)) < 1e-3)
+                {
+                    breakRendering = true;
+                    break;
+                }
+
+                atmosphereSearchStart = atmosphereHitResult.value.tExit + EPSILON;
+            }
+
+            if (breakRendering)
+            {
+                break;
             }
 
             // If the ray does not intersect with any light source or mesh.
