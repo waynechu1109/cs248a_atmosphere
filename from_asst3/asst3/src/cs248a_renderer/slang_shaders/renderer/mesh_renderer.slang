@@ -100,7 +100,7 @@ public Optional<RayMeshSampleResult> meshSample(float2 uv, RendererUniform unifo
 
                 PhysicsBasedMaterial atmosphereMaterial = uniforms.physicsBasedMaterialBuf[atmosphereHitResult.value.materialId];
                 PhysicsBasedParameters atmosphereParameters = sampleMaterial(atmosphereMaterial);
-                AtmosphereMarchResult atmosphereResult = marchAtmosphere(
+                AtmosphereMarchResult atmosphereResult = calculateLight(
                     atmosphereHitResult.value.materialId,
                     atmosphereParameters,
                     uniforms,
