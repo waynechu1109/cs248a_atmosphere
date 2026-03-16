@@ -24,12 +24,14 @@ public struct AtmosphereBRDF
 
     public float getRayleighPhase(float cosTheta)
     {
+        // Theta: the angle between the incident light direction and the viewing direction
         float c = clamp(cosTheta, -1.0, 1.0);
         return (3.0 / (16.0 * PI)) * (1.0 + c * c);
     }
 
     public float getMiePhase(float cosTheta)
     {
+        // Theta: the angle between the incident light direction and the viewing direction
         float c = clamp(cosTheta, -1.0, 1.0);
         float g = clamp(phaseG, -0.999, 0.999);
         float gg = g * g;
@@ -46,13 +48,13 @@ public struct AtmosphereBRDF
         return rayleighStrength * rayleigh + mieStrength * mie;
     }
 
-    public float3 getScatteringCoefficient(float cosTheta)
-    {
-        float rayleigh = getRayleighPhase(cosTheta);
-        float mie = getMiePhase(cosTheta);
-        return rayleighScatteringColor * rayleighStrength * rayleigh +
-            mieScatteringColor * mieStrength * mie;
-    }
+    // public float3 getScatteringCoefficient(float cosTheta)
+    // {
+    //     float rayleigh = getRayleighPhase(cosTheta);
+    //     float mie = getMiePhase(cosTheta);
+    //     return rayleighScatteringColor * rayleighStrength * rayleigh +
+    //         mieScatteringColor * mieStrength * mie;
+    // }
 
     public float3 getScatteringCoefficient(float cosTheta, float rayleighDensity, float mieDensity)
     {
@@ -74,12 +76,13 @@ public struct AtmosphereBRDF
         return baseDensity * groundWeight;
     }
 
+    // compute the total extinction ccoefficient
     public float3 getExtinctionCoefficient(float rayleighDensity, float mieDensity)
     {
         float mediumDensity = max(rayleighDensity, mieDensity);
-        return absorptionColor * mediumDensity +
-            rayleighScatteringColor * rayleighStrength * rayleighDensity +
-            mieScatteringColor * mieStrength * mieDensity;
+        return absorptionColor * mediumDensity +      // extinction by absorption
+            rayleighScatteringColor * rayleighStrength * rayleighDensity +  // extinction by Rayleigh
+            mieScatteringColor * mieStrength * mieDensity;    // extinction by Mie
     }
 
     public float getPathLength(float3 direction, float3 normal)
