@@ -234,7 +234,7 @@ public float3 evaluateRectangularLightContribution(StructuredBuffer<RectangularL
 //
 public float2 intersectSphere(float3 rayOrigin, float3 rayDirection, float3 sphereCenter, float sphereRadius)
 {
-    // compute the intersection(s) between ray and sphere
+    // Compute the intersection(s) between ray and sphere. 
     float3 oc = rayOrigin - sphereCenter;
     float a = dot(rayDirection, rayDirection);
     float b = 2.0 * dot(oc, rayDirection);
@@ -242,7 +242,7 @@ public float2 intersectSphere(float3 rayOrigin, float3 rayDirection, float3 sphe
     float discriminant = b * b - 4.0 * a * c;   // check the number of solutions
     if (discriminant < 0.0)
     {
-        // no solution
+        // No solution. 
         return float2(float.maxValue, -float.maxValue);
     }
 
@@ -289,44 +289,41 @@ public float2 opticalDepth(
 {
     if (tEnd <= tStart || stepCount == 0)
     {
+        // No valid segment.
         return float2(0.0);
     }
 
+    // Normalize by shell thickness.
     float shellThickness = max(brdf.getShellThickness(), 1e-4);
+
+    // Uniform march step.
     float stepLength = (tEnd - tStart) / stepCount;
+
+    // Accumulate Rayleigh and Mie separately.
     float rayleighOpticalDepth = 0.0;
     float mieOpticalDepth = 0.0;
 
-    // integrate: the density Reyleigh go through / the density Mie go through
+    // Midpoint integration along the ray.
     for (uint i = 0; i < stepCount; ++i)
     {
+        // Sample this step.
         float t = tStart + (float(i) + 0.5) * stepLength;
         float3 position = rayOrigin + rayDirection * t;
+
+        // Local Rayleigh/Mie density.
         float2 densities = densityAtPoint(brdf, sphereCenter, position);
+
+        // Add this step's optical depth.
         rayleighOpticalDepth += densities.x * (stepLength / shellThickness);
         mieOpticalDepth      += densities.y * (stepLength / shellThickness);
     }
 
+    // Return integrated optical depth.
     return float2(rayleighOpticalDepth, mieOpticalDepth);
 }
 
 // Estimate how much of the light that would otherwise be blocked by the planet
 // can still reach the sample point after skimming through the atmosphere.
-//
-// This is an intentionally cheap approximation rather than a full curved-ray
-// refraction solve:
-// - First, test whether the light ray passes behind the planet from the sample's
-//   point of view.
-// - If it does, measure how deeply that straight ray would penetrate into the
-//   planet's silhouette.
-// - Use that penetration depth to place a "virtual" tangent path inside the
-//   atmosphere, representing a plausible refracted route around the limb.
-// - Integrate optical depth along that virtual path and convert it to
-//   transmittance with Beer-Lambert extinction.
-//
-// The result is a soft, colored leakage term near the planetary limb or horizon,
-// where some sunlight should still appear even though the straight shadow ray is
-// geometrically occluded by the planet.
 public float3 getApproximateRefractedLightTransmittance(
     AtmosphereBRDF brdf,
     float3 sphereCenter,
@@ -334,45 +331,36 @@ public float3 getApproximateRefractedLightTransmittance(
     float3 lightDirection,
     float maxDistance = float.maxValue)
 {
-    // determines how many samples are used to estimate the optical depth 
-    // when approximately refracted light passes through the atmosphere.
+    // Steps for the virtual refracted path.
     const uint REFRACTION_STEPS = 16;
     float3 direction = normalize(lightDirection);
 
-    // Start slightly away from the sample to avoid self-intersection
+    // Offset the start point slightly.
     float3 rayStart = samplePoint + direction * 1e-3;
     float3 toCenter = sphereCenter - rayStart;
 
-    // Project the vector from the ray start to the planet center onto the light
-    // direction. This gives the distance to the closest approach point on the
-    // straight light ray.
+    // Closest approach of the light ray to the planet center.
     float projectedDistance = dot(toCenter, direction);
     if (projectedDistance <= 0.0 || projectedDistance >= maxDistance)
     {
-        // The closest approach is behind the ray start or beyond the valid light
-        // segment, so there is no relevant near-limb refracted contribution.
+        // No valid near-limb contribution.
         return float3(0.0);
     }
 
     float3 closestPoint = rayStart + direction * projectedDistance;
     float3 radialOffset = closestPoint - sphereCenter;
 
-    // The impact parameter is the minimum distance from the straight light ray
-    // to the planet center.
+    // Minimum distance from ray to center.
     float impactParameter = length(radialOffset);
     if (impactParameter >= brdf.planetRadius || impactParameter >= brdf.atmosphereRadius)
     {
-        // If the ray misses the solid planet, it should be handled by the normal
-        // atmospheric transmittance path instead of this refracted-shadow path.
-        // If it even misses the atmosphere, there is also nothing to refract.
+        // Not a refracted-shadow case.
         return float3(0.0);
     }
 
     float shellThickness = max(brdf.getShellThickness(), 1e-4);
 
-    // Only shallow shadow penetration is allowed to leak around the limb. Once
-    // the straight ray cuts too deeply through the planet, this approximation
-    // assumes atmospheric refraction can no longer recover any light.
+    // Allow only shallow penetration.
     float maxRefractionReach = shellThickness * 0.6;   // 0.6: emperical
     float shadowPenetration = brdf.planetRadius - impactParameter;
     if (shadowPenetration >= maxRefractionReach)
@@ -380,35 +368,28 @@ public float3 getApproximateRefractedLightTransmittance(
         return float3(0.0);
     }
 
-    // Convert the penetration depth into a visibility weight. Rays that barely
-    // dip into the planet's silhouette remain more visible after refraction,
-    // while deeper rays are strongly suppressed.
+    // Visibility falls off with deeper penetration.
     float refractedVisibility = 1.0 - saturate(shadowPenetration / max(maxRefractionReach, 1e-4));
 
-    // Place the virtual refracted path at a heuristic altitude above the solid
-    // surface. Deeper penetration pushes the path a bit higher, 
-    // clamp it to remain inside the lower half of the atmospheric shell.
+    // Choose a virtual tangent altitude.
     float effectiveAltitude = clamp(
         0.02 * shellThickness + shadowPenetration * 1.5,
         0.02 * shellThickness,
         0.5 * shellThickness
     );
 
-    // Convert that altitude back to a radial distance from the planet center.
+    // Convert altitude to impact radius.
     float effectiveImpact = clamp(
         brdf.planetRadius + effectiveAltitude,
         brdf.planetRadius + 1e-4,
         brdf.atmosphereRadius - 1e-4
     );
 
-    // Build a radial direction for the tangent point. In the degenerate case
-    // where the closest point is numerically at the center line, fall back to a
-    // stable perpendicular direction so the basis remains well-defined.
+    // Build the tangent point direction.
     float3 radialDirection = length(radialOffset) > 1e-4 ? normalize(radialOffset) : getStablePerpendicular(direction);
     float3 tangentPoint = sphereCenter + radialDirection * effectiveImpact;
 
-    // A straight line at this impact parameter cuts a chord through the atmosphere. 
-    // Integrate over the full chord to approximate total extinction along the refracted path.
+    // Use the atmospheric chord through that tangent path.
     float halfChordLength = sqrt(max(brdf.atmosphereRadius * brdf.atmosphereRadius - effectiveImpact * effectiveImpact, 0.0));
     if (halfChordLength <= 1e-4)
     {
@@ -417,8 +398,7 @@ public float3 getApproximateRefractedLightTransmittance(
 
     float3 virtualRayOrigin = tangentPoint - direction * halfChordLength;
 
-    // March through the virtual atmospheric chord and accumulate Rayleigh and
-    // Mie optical depth.
+    // Integrate optical depth along the virtual path.
     float2 opticalDepth = opticalDepth(
         brdf,
         sphereCenter,
@@ -429,9 +409,7 @@ public float3 getApproximateRefractedLightTransmittance(
         REFRACTION_STEPS
     );
 
-    // Convert integrated optical depth to wavelength-dependent transmittance,
-    // then scale it by a small empirical intensity term so the effect reads as
-    // subtle limb leakage rather than direct unoccluded sunlight.
+    // Convert to transmittance and scale the leakage.
     float3 transmittance = exp(-brdf.getExtinctionCoefficient(opticalDepth.x, opticalDepth.y));
     float refractedIntensity = 0.18 * refractedVisibility * refractedVisibility;
     return transmittance * refractedIntensity;
@@ -443,19 +421,7 @@ public bool isPlanetOccludingLight(float3 samplePoint, float3 lightDirection, fl
     return hitRange.x < maxDistance && hitRange.y > 0.0;
 }
 
-// Computes how much incident light remains after traveling from the light
-// source to `samplePoint` through a planetary atmosphere.
-//
-// Behavior:
-// - If the solid planet blocks the straight light path, fall back to the
-//   refracted-light approximation near the limb/horizon.
-// - Otherwise, intersect the light ray with the outer atmosphere shell,
-//   integrate optical depth along the valid segment, and convert it to
-//   transmittance using Beer-Lambert extinction.
-//
-// Returns:
-// - `float3(1.0)` when the light segment does not pass through the atmosphere.
-// - A wavelength-dependent transmittance term in all other cases.
+// Computes light transmittance through one atmosphere.
 public float3 getAtmosphereLightTransmittance(
     AtmosphereBRDF brdf,
     float3 sphereCenter,
@@ -463,21 +429,27 @@ public float3 getAtmosphereLightTransmittance(
     float3 lightDirection,
     float maxDistance = float.maxValue)
 {
+    // Steps for the light segment.
     const uint LIGHT_STEPS = 8;
     float3 direction = normalize(lightDirection);
+
+    // Use refracted-light fallback if the planet blocks the ray.
     if (isPlanetOccludingLight(samplePoint, direction, sphereCenter, brdf.planetRadius, maxDistance))
     {
         return getApproximateRefractedLightTransmittance(brdf, sphereCenter, samplePoint, direction, maxDistance);
     }
 
+    // Intersect the light ray with the atmosphere shell.
     float2 shellRange = intersectSphere(samplePoint + direction * 1e-3, direction, sphereCenter, brdf.atmosphereRadius);
     float tStart = max(shellRange.x, 0.0);
     float tEnd = min(shellRange.y, maxDistance);
     if (tEnd <= tStart)
     {
+        // Light does not pass through the atmosphere.
         return float3(1.0);
     }
 
+    // Integrate optical depth along the valid segment.
     float2 opticalDepth = opticalDepth(
         brdf,
         sphereCenter,
@@ -488,21 +460,11 @@ public float3 getAtmosphereLightTransmittance(
         LIGHT_STEPS
     );
 
+    // Convert optical depth to transmittance.
     return exp(-brdf.getExtinctionCoefficient(opticalDepth.x, opticalDepth.y));
 }
 
-// Approximates a weak multiple-scattering contribution inside the atmosphere
-// without tracing additional bounce paths.
-//
-// The heuristic boosts a soft ambient term when:
-// - The local march step contains enough Rayleigh/Mie density to scatter light.
-// - Some incident light has already been attenuated, suggesting energy is being
-//   redistributed within the medium.
-// - The sample lies lower in the atmosphere, where multiple scattering is more
-//   visually prominent.
-//
-// The returned color is tinted by the atmosphere's Rayleigh and Mie scattering
-// colors and damped by view/light transmittance so the effect remains subtle.
+// Heuristic multiple scattering term.
 public float3 getApproximateMultipleScattering(
     AtmosphereBRDF brdf,
     float normalizedHeight,
@@ -511,39 +473,38 @@ public float3 getApproximateMultipleScattering(
     float3 lightTransmittance,
     float3 viewTransmittance)
 {
+    // Overall heuristic strength.
     const float MULTI_SCATTER_STRENGTH = 0.08;
     float localDensity = max(rayleighStep + mieStep, 0.0);
     if (localDensity <= 1e-6)
     {
+        // Too little medium to matter.
         return float3(0.0);
     }
 
+    // Favor the lower atmosphere.
     float lowerAtmosphereWeight = saturate(1.0 - normalizedHeight);
+
+    // Approximate trapped and redistributed light.
     float3 trappedLight = saturate(float3(1.0) - lightTransmittance);
     float3 partialLight = trappedLight * saturate(lightTransmittance + 0.15);
-    float viewVisibility = dot(viewTransmittance, float3(0.33333334));   // average RGB
-    float horizonDamping = smoothstep(0.15, 0.65, viewVisibility);       // set threshold
+
+    // Dampen when the view path is too opaque.
+    float viewVisibility = dot(viewTransmittance, float3(0.33333334));
+    float horizonDamping = smoothstep(0.15, 0.65, viewVisibility);
+
+    // Blend Rayleigh and Mie tint.
     float3 ambientTint =
         brdf.rayleighScatteringColor * (0.45 + 0.25 * lowerAtmosphereWeight) +
         brdf.mieScatteringColor * (0.05 + 0.15 * lowerAtmosphereWeight);
 
+    // Return the heuristic ambient term.
     return ambientTint * localDensity * partialLight * lowerAtmosphereWeight *
         horizonDamping * MULTI_SCATTER_STRENGTH;
 }
 
 // Filters a light ray through every atmosphere-enabled spherical medium in the
 // scene and accumulates the total transmittance along the light segment.
-//
-// For each atmosphere:
-// - Skip it if the ray does not intersect the atmospheric shell.
-// - If the solid planet blocks the straight light path, use the refracted-light
-//   approximation near the limb; if that contribution is negligible, mark the
-//   light as occluded.
-// - Otherwise, integrate optical depth through the valid shell segment and
-//   convert it to Beer-Lambert transmittance.
-//
-// The final `transmittance` is the product of all atmosphere contributions
-// encountered before reaching the light source.
 public FilteredLightResult filterLightThroughAtmospheres(float3 hitPoint, float3 lightDirection, float lightDistance, RendererUniform uniforms, uint excludedMaterialId = 0xffffffff)
 {
     FilteredLightResult result = FilteredLightResult(float3(1.0), false);
@@ -651,117 +612,13 @@ public AtmosphereBRDF makeAtmosphereBRDF(PhysicsBasedParameters parameters)
 
 public float3 getAtmosphereDirectIllumination(PhysicsBasedParameters parameters, RendererUniform uniforms, float3 rayOut, float3 normal, float3 hitPoint, inout RNG rng)
 {
-    float3 outgoingRadiance = float3(0.0);
-    const float ATMOSPHERE_BRIGHTNESS_SCALE = 0.5;
-    const float EPSILON = 1e-2;
-    AtmosphereBRDF brdf = makeAtmosphereBRDF(parameters);
-
-    if (uniforms.pointLightCount == 0 && uniforms.directionalLightCount == 0 && uniforms.rectangularLightCount == 0)
-    {
-        LightSample lightSample = FlashLight().sample(rayOut);
-        float3 irradiance = lightSample.radiance / lightSample.pdf;
-        float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
-        float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
-        return atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
-    }
-
-    for (int i = 0; i < uniforms.pointLightCount; i++)
-    {
-        LightSample lightSample = uniforms.pointLightBuf[i].sample(hitPoint);
-        bool occluded = isLightOccluded(lightSample, hitPoint, uniforms);
-        if (occluded)
-        {
-            continue;
-        }
-        FilteredLightResult filteredLight = filterLightThroughAtmospheres(
-            hitPoint,
-            lightSample.lightDirection,
-            lightSample.lightDistance,
-            uniforms
-        );
-        if (filteredLight.occluded)
-        {
-            continue;
-        }
-        float fallOffFactor = lightSample.lightDistance * lightSample.lightDistance;
-        float3 irradiance = (lightSample.radiance / ((fallOffFactor + EPSILON) * lightSample.pdf)) * filteredLight.transmittance;
-        float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
-        float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
-        outgoingRadiance += atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
-    }
-
-    for (int i = 0; i < uniforms.directionalLightCount; i++)
-    {
-        LightSample lightSample = uniforms.directionalLightBuf[i].sample();
-        bool occluded = isLightOccluded(lightSample, hitPoint, uniforms);
-        if (occluded)
-        {
-            continue;
-        }
-        FilteredLightResult filteredLight = filterLightThroughAtmospheres(
-            hitPoint,
-            lightSample.lightDirection,
-            lightSample.lightDistance,
-            uniforms
-        );
-        if (filteredLight.occluded)
-        {
-            continue;
-        }
-        float3 irradiance = (lightSample.radiance / lightSample.pdf) * filteredLight.transmittance;
-        float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
-        float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
-        outgoingRadiance += atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
-    }
-
-    for (int i = 0; i < uniforms.rectangularLightCount; i++)
-    {
-        float3 accumulatedContribution = float3(0.0);
-        int validSamples = 0;
-
-        for (int j = 0; j < uniforms.numRectangularLightSamples; j++)
-        {
-            float2 randomEpsilon = rng.next_2d();
-            LightSample lightSample = uniforms.rectangularLightBuf[i].sample(hitPoint, randomEpsilon);
-            bool occluded = isLightOccluded(lightSample, hitPoint, uniforms);
-            if (occluded)
-            {
-                continue;
-            }
-            FilteredLightResult filteredLight = filterLightThroughAtmospheres(
-                hitPoint,
-                lightSample.lightDirection,
-                lightSample.lightDistance,
-                uniforms
-            );
-            if (filteredLight.occluded)
-            {
-                continue;
-            }
-            float3 irradiance = (lightSample.radiance / lightSample.pdf) * filteredLight.transmittance;
-            float3 atmosphereFr = brdf.evaluate(rayOut, normal, lightSample.lightDirection);
-            float lightVisibility = 0.25 + 0.75 * abs(dot(normalize(normal), normalize(lightSample.lightDirection)));
-            accumulatedContribution += atmosphereFr * irradiance * lightVisibility * ATMOSPHERE_BRIGHTNESS_SCALE;
-            validSamples++;
-        }
-
-        if (validSamples > 0)
-        {
-            outgoingRadiance += accumulatedContribution / validSamples;
-        }
-    }
-
-    return outgoingRadiance;
+    // Atmosphere lighting should come from the volumetric marching path.
+    // Returning a surface-like direct term here double-counts the medium and
+    // makes the sun-facing hemisphere look self-emissive.
+    return float3(0.0);
 }
 
-// Marches along the view ray segment inside the atmosphere and accumulates:
-// - in-scattered radiance contributed by each light source at every sample, and
-// - remaining view transmittance after extinction through the medium.
-//
-// At each march step, the function evaluates local Rayleigh/Mie density, checks
-// direct visibility to each light, filters the light through any intervening
-// atmospheres, applies single-scattering from the local medium, and adds a
-// small heuristic multiple-scattering term.
+// Marches along the view ray through the atmosphere.
 public AtmosphereMarchResult calculateLight(
     uint materialId,
     PhysicsBasedParameters parameters,
@@ -771,14 +628,17 @@ public AtmosphereMarchResult calculateLight(
     float tStart,
     float tEnd)
 {
+    // Steps along the view ray.
     const uint VIEW_STEPS = 32;
     AtmosphereBRDF brdf = makeAtmosphereBRDF(parameters);
     float3 sphereCenter = parameters.atmosphereCenter;
     if (tEnd <= tStart)
     {
+        // No valid atmosphere segment.
         return AtmosphereMarchResult(float3(0.0), float3(1.0));
     }
 
+    // Initialize the marched segment.
     float shellThickness = max(brdf.getShellThickness(), 1e-4);
     float segmentLength = tEnd - tStart;
     float stepLength = segmentLength / VIEW_STEPS;
@@ -789,7 +649,7 @@ public AtmosphereMarchResult calculateLight(
     [MaxIters(VIEW_STEPS)]
     for (uint i = 0; i < VIEW_STEPS; ++i)
     {
-        // Sample the current point along the camera/view ray inside the atmosphere.
+        // Sample this point along the ray.
         float t = tStart + (float(i) + 0.5) * stepLength;
         float3 samplePoint = rayOrigin + rayDirection * t;
         float2 densities = densityAtPoint(brdf, sphereCenter, samplePoint);
@@ -798,14 +658,14 @@ public AtmosphereMarchResult calculateLight(
             continue;
         }
 
-        // Convert local density into per-step optical depth contribution.
+        // Per-step optical depth.
         float rayleighStep = densities.x * (stepLength / shellThickness);
         float mieStep = densities.y * (stepLength / shellThickness);
         float radius = length(samplePoint - sphereCenter);
         float normalizedHeight = saturate((radius - brdf.planetRadius) / shellThickness);
         float3 stepScattering = float3(0.0);
 
-        // Fallback path used when the scene contains no explicit lights.
+        // Fallback light when the scene has no explicit lights.
         if (uniforms.pointLightCount == 0 && uniforms.directionalLightCount == 0 && uniforms.rectangularLightCount == 0)
         {
             LightSample lightSample = FlashLight().sample(viewDirection);
@@ -842,8 +702,7 @@ public AtmosphereMarchResult calculateLight(
             ) * lightSample.radiance;
         }
 
-        // Accumulate single-scattering and approximate multiple scattering from
-        // point lights, including geometric occlusion and atmospheric filtering.
+        // Point lights.
         for (int lightIdx = 0; lightIdx < uniforms.pointLightCount; ++lightIdx)
         {
             LightSample lightSample = uniforms.pointLightBuf[lightIdx].sample(samplePoint);
@@ -881,8 +740,7 @@ public AtmosphereMarchResult calculateLight(
             ) * (lightSample.radiance / distanceFalloff);
         }
 
-        // Directional lights use the same local scattering model without
-        // inverse-square distance falloff.
+        // Directional lights.
         for (int lightIdx = 0; lightIdx < uniforms.directionalLightCount; ++lightIdx)
         {
             LightSample lightSample = uniforms.directionalLightBuf[lightIdx].sample();
@@ -919,8 +777,7 @@ public AtmosphereMarchResult calculateLight(
             ) * lightSample.radiance;
         }
 
-        // Area lights are Monte Carlo sampled and averaged before being added to
-        // the local in-scattering estimate.
+        // Rectangular area lights.
         for (int lightIdx = 0; lightIdx < uniforms.rectangularLightCount; ++lightIdx)
         {
             float3 accumulatedRectangular = float3(0.0);
@@ -972,10 +829,9 @@ public AtmosphereMarchResult calculateLight(
             }
         }
 
-        // The current view-ray transmittance attenuates how much of this local
-        // scattering contribution actually reaches the camera.
+        // Accumulate this step's in-scattering.
         inscatteredRadiance += transmittance * stepScattering;
-        // Update view transmittance for the next march step.
+        // Update view transmittance.
         transmittance *= exp(-brdf.getExtinctionCoefficient(rayleighStep, mieStep));
     }
 
@@ -1156,22 +1012,11 @@ public SampleBRDFResult sampleBRDF(PhysicsBasedParameters parameters, float3 ray
     }
     else if (parameters.brdfType == 5)
     {
-        AtmosphereBRDF brdf = AtmosphereBRDF(
-            parameters.albedo,
-            parameters.atmosphereRayleighScatteringColor,
-            parameters.atmosphereMieScatteringColor,
-            parameters.atmosphereAbsorptionColor,
-            parameters.atmosphereRayleighDensityFalloff,
-            parameters.atmosphereMieDensityFalloff,
-            parameters.atmosphereRayleighStrength,
-            parameters.atmosphereMieStrength,
-            parameters.atmospherePhaseG,
-            parameters.atmospherePlanetRadius,
-            parameters.atmospherePlanetRadius + parameters.atmosphereThickness
-        );
-        sampledDirection = brdf.sample(rayOut, normal);
-        fr = brdf.evaluate(rayOut, normal, sampledDirection);
-        sampledPdf = brdf.pdf(sampledDirection, rayOut, normal);
+        // Atmosphere materials are treated as participating media, not surface
+        // BRDFs. Their contribution is handled in the volumetric marching path.
+        sampledDirection = normalize(rayOut);
+        fr = float3(0.0);
+        sampledPdf = 1.0;
     }
 
     return SampleBRDFResult(fr, sampledDirection, sampledPdf);

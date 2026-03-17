@@ -16,22 +16,23 @@ public struct AtmosphereBRDF
     public float planetRadius;
     public float atmosphereRadius;
 
-    public float getShellThickness()   // get the thickness of atmosphere
+    public float getShellThickness()
     {
+        // Atmosphere shell thickness.
         float shellThickness = max(atmosphereRadius - planetRadius, 0.0);
         return shellThickness;
     }
 
     public float getRayleighPhase(float cosTheta)
     {
-        // Theta: the angle between the incident light direction and the viewing direction
+        // Rayleigh phase.
         float c = clamp(cosTheta, -1.0, 1.0);
         return (3.0 / (16.0 * PI)) * (1.0 + c * c);
     }
 
     public float getMiePhase(float cosTheta)
     {
-        // Theta: the angle between the incident light direction and the viewing direction
+        // Henyey-Greenstein phase.
         float c = clamp(cosTheta, -1.0, 1.0);
         float g = clamp(phaseG, -0.999, 0.999);
         float gg = g * g;
@@ -40,8 +41,9 @@ public struct AtmosphereBRDF
         return (1.0 - gg) / (4.0 * PI * pow(denom, 1.5));
     }
 
-    public float getPhaseValue(float cosTheta)   // compute the scattering direction distribution
+    public float getPhaseValue(float cosTheta)
     {
+        // Weighted phase value.
         float rayleigh = getRayleighPhase(cosTheta);
         float mie = getMiePhase(cosTheta);
 
@@ -58,6 +60,7 @@ public struct AtmosphereBRDF
 
     public float3 getScatteringCoefficient(float cosTheta, float rayleighDensity, float mieDensity)
     {
+        // Per-channel scattering coefficient.
         float rayleigh = getRayleighPhase(cosTheta);
         float mie = getMiePhase(cosTheta);
         return rayleighScatteringColor * rayleighStrength * rayleigh * rayleighDensity +
@@ -66,27 +69,30 @@ public struct AtmosphereBRDF
 
     public float getRayleighDensity(float normalizedHeight)
     {
+        // Exponential Rayleigh falloff.
         return exp(-normalizedHeight * max(rayleighDensityFalloff, 0.0));
     }
 
     public float getMieDensity(float normalizedHeight)
     {
+        // Exponential Mie falloff with ground bias.
         float baseDensity = exp(-normalizedHeight * max(mieDensityFalloff, 0.0));
         float groundWeight = pow(saturate(1.0 - normalizedHeight), 3.0);
         return baseDensity * groundWeight;
     }
 
-    // compute the total extinction ccoefficient
     public float3 getExtinctionCoefficient(float rayleighDensity, float mieDensity)
     {
+        // Total extinction coefficient.
         float mediumDensity = max(rayleighDensity, mieDensity);
-        return absorptionColor * mediumDensity +      // extinction by absorption
-            rayleighScatteringColor * rayleighStrength * rayleighDensity +  // extinction by Rayleigh
-            mieScatteringColor * mieStrength * mieDensity;    // extinction by Mie
+        return absorptionColor * mediumDensity +
+            rayleighScatteringColor * rayleighStrength * rayleighDensity +
+            mieScatteringColor * mieStrength * mieDensity;
     }
 
     public float getPathLength(float3 direction, float3 normal)
     {
+        // Approximate path length through the shell.
         float3 n = normalize(normal);
         float3 w = normalize(direction);
         float cosTheta = max(abs(dot(n, w)), 1e-3);
@@ -96,17 +102,20 @@ public struct AtmosphereBRDF
 
     public float3 getTransmittance(float pathLength)
     {
+        // Beer-Lambert transmittance.
         float opticalDepth = max(pathLength, 0.0);
         return exp(-getExtinctionCoefficient(1.0, 1.0) * opticalDepth);
     }
 
     public float3 getViewTransmittance(float3 rayOut, float3 normal)
     {
+        // View transmittance through the shell.
         return getTransmittance(getPathLength(rayOut, normal));
     }
 
     public float3 evaluate(float3 rayOut, float3 normal, float3 lightDirection)
     {
+        // Approximate in-scattered light.
         float3 wo = normalize(rayOut);
         float3 wi = normalize(lightDirection);
 
@@ -126,6 +135,7 @@ public struct AtmosphereBRDF
 
     public float3 sample(float3 rayOut, float3 normal)
     {
+        // Bias samples toward the forward direction.
         float3 n = normalize(normal);
         float3 wo = normalize(rayOut);
         if (dot(n, wo) < 0.0)

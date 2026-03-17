@@ -20,6 +20,7 @@ public struct AtmosphereHitResult
 
 public Optional<AtmosphereHitResult> rayAtmosphereIntersection(Ray ray, RendererUniform uniforms, float tLimit = float.maxValue)
 {
+    // Track the nearest atmosphere entry.
     Optional<AtmosphereHitResult> closest = Optional<AtmosphereHitResult>();
     float closestEntry = float.maxValue;
 
@@ -28,21 +29,27 @@ public Optional<AtmosphereHitResult> rayAtmosphereIntersection(Ray ray, Renderer
         PhysicsBasedMaterial material = uniforms.physicsBasedMaterialBuf[materialId];
         if (material.atmosphereEnabled == 0 || material.atmosphereThickness <= 0.0)
         {
+            // Skip materials without atmosphere.
             continue;
         }
 
+        // Intersect the ray with the atmosphere shell.
         float outerRadius = material.atmospherePlanetRadius + material.atmosphereThickness;
         float2 shellRange = intersectSphere(ray.origin, ray.direction, material.atmosphereCenter, outerRadius);
+
+        // Clamp the valid segment to the ray range and t limit.
         float tEntry = max(max(shellRange.x, ray.tRange.x), 0.0);
         float tExit = min(shellRange.y, min(ray.tRange.y, tLimit));
 
         if (tExit <= tEntry)
         {
+            // No valid overlap.
             continue;
         }
 
         if (!closest.hasValue || tEntry < closestEntry)
         {
+            // Keep the nearest atmosphere hit.
             closestEntry = tEntry;
             closest = Optional<AtmosphereHitResult>(AtmosphereHitResult(materialId, tEntry, tExit));
         }
@@ -197,30 +204,14 @@ public Optional<RayMeshSampleResult> meshSample(float2 uv, RendererUniform unifo
 
                 if (parameters.brdfType == 5)
                 {
-                    AtmosphereBRDF atmosphere = AtmosphereBRDF(
-                        parameters.albedo,
-                        parameters.atmosphereRayleighScatteringColor,
-                        parameters.atmosphereMieScatteringColor,
-                        parameters.atmosphereAbsorptionColor,
-                        parameters.atmosphereRayleighDensityFalloff,
-                        parameters.atmosphereMieDensityFalloff,
-                        parameters.atmosphereRayleighStrength,
-                        parameters.atmosphereMieStrength,
-                        parameters.atmospherePhaseG,
-                        parameters.atmospherePlanetRadius,
-                        parameters.atmospherePlanetRadius + parameters.atmosphereThickness
-                    );
-
-                    throughput *= atmosphere.getViewTransmittance(rayOut, normal);
+                    // The participating-medium contribution for atmosphere
+                    // materials has already been accumulated before this mesh
+                    // hit via `calculateLight`. Crossing the shell boundary
+                    // should not add another surface attenuation term.
                     ray.origin = hitPoint + normalize(ray.direction) * EPSILON;
                     ray.direction = normalize(ray.direction);
                     ray.tRange = float2(EPSILON, float.maxValue);
                     renderLight = true;
-
-                    if (max(throughput.x, max(throughput.y, throughput.z)) < 1e-3)
-                    {
-                        breakRendering = true;
-                    }
 
                     break;
                 }
